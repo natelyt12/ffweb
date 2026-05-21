@@ -1,6 +1,6 @@
 {
     "Tăng âm lượng": {
-        "cmd": "-filter:a \"volume=30dB\" -c:v copy",
+        "cmd": "-filter:a \"volume=10dB\" -c:v copy",
         "ext": ".mp4"
     },
     "Nén ảnh": {

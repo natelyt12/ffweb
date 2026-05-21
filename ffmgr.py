@@ -3,17 +3,17 @@ import json
 import subprocess
 import sys
 
-# --- Bảng màu Dracula Theme ---
+# --- Bảng màu Pastel Aesthetic ---
 class UI:
-    HEADER = '\033[38;2;189;147;249m' # Purple
-    BLUE   = '\033[38;2;139;233;253m' # Cyan
-    CYAN   = '\033[38;2;139;233;253m' # Cyan
-    GREEN  = '\033[38;2;80;250;123m'  # Green
-    YELLOW = '\033[38;2;241;250;140m' # Yellow
-    RED    = '\033[38;2;255;85;85m'   # Red
-    WHITE  = '\033[38;2;248;248;242m' # Foreground
-    GRAY   = '\033[38;2;98;114;164m'  # Comment
-    SELECT = '\033[1m\033[38;2;255;121;198m' # Pink Bold
+    HEADER = '\033[38;2;205;180;219m' # Soft Lavender (Pastel Purple)
+    BLUE   = '\033[38;2;162;210;255m' # Soft Ice Blue (Pastel Blue)
+    CYAN   = '\033[38;2;162;210;255m' # Soft Ice Blue (Pastel Blue)
+    GREEN  = '\033[38;2;168;230;207m' # Soft Mint Green (Pastel Green)
+    YELLOW = '\033[38;2;255;238;186m' # Soft Cream / Pale Yellow (Pastel Yellow)
+    RED    = '\033[38;2;255;179;186m' # Soft Coral Pink (Pastel Red/Pink)
+    WHITE  = '\033[38;2;240;240;240m' # Soft White
+    GRAY   = '\033[38;2;150;160;175m' # Soft Slate Gray (Muted text / Comments)
+    SELECT = '\033[1m\033[38;2;162;210;255m' # Bold Soft Ice Blue (No background)
     END    = '\033[0m'
     BOLD   = '\033[1m'
     HIDE_CURSOR = '\033[?25l'
@@ -30,10 +30,25 @@ class Media:
     @staticmethod
     def get_label(filename):
         ext = os.path.splitext(filename)[1].lower()
-        if ext in Media.VIDEO: return f"{UI.CYAN}[VIDEO]{UI.END}"
-        if ext in Media.AUDIO: return f"{UI.GREEN}[AUDIO]{UI.END}"
+        if ext in Media.VIDEO: return f"{UI.HEADER}[VIDEO]{UI.END}"
+        if ext in Media.AUDIO: return f"{UI.BLUE}[AUDIO]{UI.END}"
         if ext in Media.IMAGE: return f"{UI.YELLOW}[IMAGE]{UI.END}"
         return f"{UI.GRAY}[FILE]{UI.END}"
+
+    @staticmethod
+    def get_size_str(filepath):
+        try:
+            size_bytes = os.path.getsize(filepath)
+            if size_bytes < 1024:
+                return f"{size_bytes} B"
+            elif size_bytes < 1024 * 1024:
+                return f"{size_bytes / 1024:.1f} KB"
+            elif size_bytes < 1024 * 1024 * 1024:
+                return f"{size_bytes / (1024 * 1024):.1f} MB"
+            else:
+                return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+        except Exception:
+            return "N/A"
 
 # Cấu hình đường dẫn file
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -69,13 +84,14 @@ def save_commands(commands):
         json.dump(commands, f, indent=4, ensure_ascii=False)
 
 def get_key():
-    """Đọc phím từ bàn phím hỗ trợ mũi tên, enter, backspace và ký tự"""
+    """Đọc phím từ bàn phím hỗ trợ enter, esc, backspace và ký tự thường"""
     if os.name == 'nt':
         import msvcrt
         key = msvcrt.getch()
         if key in (b'\x00', b'\xe0'):
-            key = msvcrt.getch()
-            return {'H': 'up', 'P': 'down', 'K': 'left', 'M': 'right'}.get(key.decode(), None)
+            # Bỏ qua phím mũi tên đặc biệt
+            msvcrt.getch()
+            return None
         if key == b'\r': return 'enter'
         if key == b'\x1b': return 'esc'
         if key == b' ': return 'space'
@@ -86,16 +102,13 @@ def get_key():
             if char.isprintable(): return char
         except: pass
     else:
-        import tty, termios, select
+        import tty, termios
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         try:
             tty.setraw(sys.stdin.fileno())
             ch = sys.stdin.read(1)
             if ch == '\x1b':
-                if select.select([sys.stdin], [], [], 0.05)[0]:
-                    ch2 = sys.stdin.read(2)
-                    return {'[A': 'up', '[B': 'down', '[C': 'right', '[D': 'left'}.get(ch2, None)
                 return 'esc'
             if ch == '\r': return 'enter'
             if ch == ' ': return 'space'
@@ -155,6 +168,9 @@ def interactive_menu(title, options, subtitle=None, max_visible=None, multi_sele
     
     while True:
         filtered_indices = []
+        if enable_search:
+            filtered_indices.append(-2)  # Nút tìm kiếm ảo ở đầu danh sách
+            
         for i, opt in enumerate(options):
             if "---" in opt:
                 if not search_query: filtered_indices.append(i)
@@ -183,9 +199,6 @@ def interactive_menu(title, options, subtitle=None, max_visible=None, multi_sele
         print(f"{UI.HEADER}{UI.BOLD}=== {title} ==={UI.END}\033[K")
         if subtitle: print(f" {UI.GRAY}{subtitle}{UI.END}\033[K")
         
-        if enable_search:
-            print(f" {UI.YELLOW}🔍 Search:{UI.END} {search_query}█\033[K")
-        
         start_index = 0
         end_index = 0
         if num_options == 0:
@@ -202,15 +215,19 @@ def interactive_menu(title, options, subtitle=None, max_visible=None, multi_sele
             
             for idx in range(start_index, end_index):
                 orig_idx = filtered_indices[idx]
-                option = options[orig_idx]
                 print('\033[K', end="")
+                
+                if orig_idx == -2:
+                    option = f"{UI.YELLOW}🔍 Search: {f'\"{search_query}\"' if search_query else '[Show All] (Click to search)'}{UI.END}"
+                else:
+                    option = options[orig_idx]
                 
                 if "---" in option:
                     print(f" {UI.GRAY} {option}{UI.END}")
                     continue
                 
                 prefix = ""
-                if multi_select:
+                if multi_select and orig_idx != -2:
                     is_checked = False
                     if orig_idx in toggle_groups:
                         targets = toggle_groups[orig_idx]
@@ -233,28 +250,34 @@ def interactive_menu(title, options, subtitle=None, max_visible=None, multi_sele
             else: print("\033[K")
             
         scroll_info = f" | Showing {start_index+1}-{end_index} of {num_options}" if limit < num_options else ""
-        help_text = "Arrows: Move | Enter: Select | Esc: Back"
+        help_text = "w/s: Move | f/Enter: Confirm | Esc: Back"
         if multi_select: help_text += " | Space: Toggle"
-        if enable_search: help_text += " | Type to search"
         
         print(f"{UI.CYAN}({help_text}){scroll_info}{UI.END}\033[K")
         print('\033[J', end="") 
         
         key = get_key()
-        if key == 'up':
+        move_up = key == 'w'
+        move_down = key == 's'
+        is_confirm = key == 'enter' or key == 'f'
+        is_back = key == 'esc'
+        
+        if move_up:
             if num_options > 0:
                 selected_index = (selected_index - 1) % num_options
-                while "---" in options[filtered_indices[selected_index]]:
+                while selected_index < len(filtered_indices) and filtered_indices[selected_index] != -2 and "---" in options[filtered_indices[selected_index]]:
                     selected_index = (selected_index - 1) % num_options
-        elif key == 'down':
+        elif move_down:
             if num_options > 0:
                 selected_index = (selected_index + 1) % num_options
-                while "---" in options[filtered_indices[selected_index]]:
+                while selected_index < len(filtered_indices) and filtered_indices[selected_index] != -2 and "---" in options[filtered_indices[selected_index]]:
                     selected_index = (selected_index + 1) % num_options
         elif key == 'space':
-            if multi_select and num_options > 0:
+            if num_options > 0:
                 orig_idx = filtered_indices[selected_index]
-                if "---" not in options[orig_idx]:
+                if orig_idx == -2:
+                    is_confirm = True
+                elif multi_select and "---" not in options[orig_idx]:
                     if orig_idx in toggle_groups:
                         targets = toggle_groups[orig_idx]
                         all_selected = all(t in selected_items for t in targets) and len(targets) > 0
@@ -265,50 +288,45 @@ def interactive_menu(title, options, subtitle=None, max_visible=None, multi_sele
                     else:
                         if orig_idx in selected_items: selected_items.remove(orig_idx)
                         else: selected_items.add(orig_idx)
-            elif enable_search:
-                search_query += " "
-                selected_index = 0
-        elif key == 'enter':
-            print()
-            print(UI.HIDE_CURSOR, end="")
-            if multi_select:
-                if not selected_items and num_options > 0:
-                    return [i for i in filtered_indices if "---" not in options[i] and i not in toggle_groups]
-                return [i for i in selected_items if i not in toggle_groups]
-            else:
-                if num_options > 0:
-                    orig_idx = filtered_indices[selected_index]
-                    if "---" not in options[orig_idx]: return orig_idx
-                return -1
-        elif key == 'esc':
-            if enable_search and search_query:
-                search_query = ""
-                selected_index = 0
-            else:
-                print(UI.SHOW_CURSOR, end="")
-                return [] if multi_select else -1
-        elif key == 'backspace':
-            if enable_search:
-                search_query = search_query[:-1]
-                selected_index = 0
+        
+        if is_confirm:
+            if num_options > 0:
+                orig_idx = filtered_indices[selected_index]
+                if orig_idx == -2:
+                    print(UI.SHOW_CURSOR, end="")
+                    os.system('cls' if os.name == 'nt' else 'clear')
+                    print(f"{UI.HEADER}=== SEARCH FILTER ==={UI.END}")
+                    print(f"{UI.GRAY}Enter keyword to filter the list. Press Esc to clear/cancel.{UI.END}\n")
+                    new_query = interactive_input("Search keyword > ", search_query)
+                    if new_query is not None:
+                        search_query = new_query.strip()
+                    selected_index = 0
+                    continue
+                
+                if "---" not in options[orig_idx]:
+                    print()
+                    print(UI.HIDE_CURSOR, end="")
+                    if multi_select:
+                        if not selected_items:
+                            return [i for i in filtered_indices if i != -2 and "---" not in options[i] and i not in toggle_groups]
+                        return [i for i in selected_items if i not in toggle_groups]
+                    else:
+                        return orig_idx
+            return -1
+        elif is_back:
+            print(UI.SHOW_CURSOR, end="")
+            return [] if multi_select else -1
         elif key and len(key) == 1:
-            if enable_search:
-                search_query += key
-                selected_index = 0
-            else:
-                if key.isdigit() or key.isalpha():
-                    for orig_idx in filtered_indices:
-                        opt_str = options[orig_idx].strip()
-                        if opt_str.lower().startswith(f"{key.lower()}.") or opt_str.lower().startswith(f"{key.lower()} "):
-                            print(UI.SHOW_CURSOR, end="")
-                            return orig_idx
+            if key in ('w', 's', 'f'):
+                pass
+            elif key.isdigit() or key.isalpha():
+                for orig_idx in filtered_indices:
+                    if orig_idx == -2: continue
+                    opt_str = options[orig_idx].strip()
+                    if opt_str.lower().startswith(f"{key.lower()}.") or opt_str.lower().startswith(f"{key.lower()} "):
+                        print(UI.SHOW_CURSOR, end="")
+                        return orig_idx
 
-def get_ffprobe_info(filepath):
-    os.system('cls' if os.name == 'nt' else 'clear')
-    print(f"{UI.HEADER}--- File Information ---{UI.END}\n")
-    subprocess.run(f'ffprobe -v quiet -show_entries format=size,duration,bit_rate:stream=codec_name,width,height,r_frame_rate -of default=noprint_wrappers=1 "{filepath}"', shell=True)
-    print(f"\n{UI.CYAN}Press Enter to return...{UI.END}")
-    input()
 
 def open_file_default(filepath):
     try:
@@ -343,7 +361,8 @@ def run_process_flow(commands):
         
     file_start_idx = len(menu_options)
     for f in files:
-        menu_options.append(f"{Media.get_label(f)} {f}")
+        size_str = Media.get_size_str(f)
+        menu_options.append(f"{Media.get_label(f)} {f} {UI.GRAY}({size_str}){UI.END}")
         
     for i, ext in enumerate(toggler_indices):
         target_indices = []
@@ -367,8 +386,7 @@ def run_process_flow(commands):
         
         if len(sel_files) == 1:
             menu_options.extend([
-                "3. View Media Info (ffprobe)",
-                "4. Preview Media",
+                "3. Preview Media",
                 "--------------------------"
             ])
             
@@ -380,10 +398,7 @@ def run_process_flow(commands):
         action = menu_options[c_idx]
         if "---" in action: continue
         
-        if "View Info" in action:
-            get_ffprobe_info(sel_files[0])
-            continue
-        elif "Preview" in action:
+        if "Preview" in action:
             open_file_default(sel_files[0])
             continue
 
@@ -419,7 +434,8 @@ def run_process_flow(commands):
             
             print()
             prompt2 = f"{UI.BOLD}Output extension{UI.END} {UI.GRAY}(e.g. .mp4) [Leave blank to keep original]:{UI.END} "
-            output_ext = interactive_input(prompt2, last_manual_ext if last_manual_ext else ".")
+            default_ext = os.path.splitext(sel_files[0])[1].lower() if sel_files else ".mp4"
+            output_ext = interactive_input(prompt2, default_ext)
             if output_ext is None: continue
             
             cmd_template = cmd_template.strip()
@@ -526,12 +542,11 @@ def manage_commands(commands):
             if not commands:
                 print(f" {UI.GRAY}No presets found.{UI.END}")
             else:
-                max_name_len = max(len(k) for k in commands.keys()) if commands else 10
-                for k, v in commands.items(): 
-                    name = f"{UI.CYAN}{UI.BOLD}{k.ljust(max_name_len)}{UI.END}"
-                    ext  = f"{UI.YELLOW}{v['ext'].rjust(6)}{UI.END}"
-                    cmd  = f"{UI.GRAY}{v['cmd']}{UI.END}"
-                    print(f" {name} {UI.GRAY}|{UI.END} {ext} {UI.GRAY}|{UI.END} {cmd}")
+                for idx, (k, v) in enumerate(commands.items(), 1):
+                    print(f" {UI.CYAN}{UI.BOLD}Preset #{idx}: {k}{UI.END}")
+                    print(f"   {UI.WHITE}- Extension:{UI.END} {UI.YELLOW}{v['ext']}{UI.END}")
+                    print(f"   {UI.WHITE}- Options:  {UI.END} {UI.GRAY}{v['cmd']}{UI.END}")
+                    print(f" {UI.GRAY}----------------------------------------{UI.END}")
             input("\nPress Enter to return...")
             
         elif choice == 1 or choice == 2:
@@ -565,19 +580,11 @@ def manage_commands(commands):
                 print(f"{UI.HEADER}{UI.BOLD}=== {title} ==={UI.END}")
                 print(f"{UI.CYAN}(Type 'exit' to cancel, Enter to keep/default){UI.END}\n")
                 
-                col_w = 20
-                col_c = 45
-                print(f" {UI.GRAY}{'FIELD'.ljust(col_w)} | {'CURRENT'.ljust(col_c)} | {'NEW VALUE'}{UI.END}")
-                print(f" {UI.GRAY}{'-'*col_w}-+-{'-'*col_c}-+-{'-'*25}{UI.END}")
-                
+                print(f" {UI.GRAY}----------------------------------------{UI.END}")
                 for j, (f_key, f_label, f_curr) in enumerate(fields):
-                    disp_curr = (f_curr[:42] + '..') if len(str(f_curr)) > 44 else str(f_curr)
-                    
                     if i == j:
-                        prompt_str = f" {UI.BOLD}{UI.YELLOW}➜ {f_label.ljust(col_w-2)}{UI.END} | {UI.WHITE}{disp_curr.ljust(col_c)}{UI.END} | "
-                        
                         if f_key == "ext" and not f_curr: f_curr = "."
-                        
+                        prompt_str = f" {UI.BOLD}{UI.YELLOW}➜ {f_label}:{UI.END} {UI.WHITE}(Current: {f_curr}){UI.END}\n   {UI.BOLD}New Value > {UI.END}"
                         val = interactive_input(prompt_str, f_curr if is_edit else ("." if f_key == "ext" else ""))
                         if val is None or val.strip().lower() == 'exit':
                             cancelled = True
@@ -585,7 +592,8 @@ def manage_commands(commands):
                         new_values[f_key] = val.strip() if val.strip() else (f_curr if is_edit else "")
                     else:
                         val_done = new_values.get(f_key, "...")
-                        print(f" {UI.GRAY}  {f_label.ljust(col_w-2)} | {disp_curr.ljust(col_c)} | {val_done}{UI.END}")
+                        print(f"   {UI.GRAY}{f_label}: (Current: {f_curr}) -> {val_done}{UI.END}")
+                    print(f" {UI.GRAY}----------------------------------------{UI.END}")
                 
                 if cancelled: break
             
