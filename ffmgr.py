@@ -3,7 +3,7 @@ import json
 import subprocess
 import sys
 
-# --- Bảng màu Pastel Aesthetic ---
+# --- Pastel Aesthetic Color Palette ---
 class UI:
     HEADER = '\033[38;2;205;180;219m' # Soft Lavender (Pastel Purple)
     BLUE   = '\033[38;2;162;210;255m' # Soft Ice Blue (Pastel Blue)
@@ -20,7 +20,7 @@ class UI:
     SHOW_CURSOR = '\033[?25h'
     HOME_CURSOR = '\033[H'
     
-# Định nghĩa các loại định dạng Media
+# Media types definition
 class Media:
     VIDEO = {'.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'}
     AUDIO = {'.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.opus', '.wma'}
@@ -50,12 +50,37 @@ class Media:
         except Exception:
             return "N/A"
 
-# Cấu hình đường dẫn file
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(SCRIPT_DIR, "ffmpeg_commands.json")
+# User config file location (~/.ffcli/ffmpeg_commands.json)
+USER_HOME = os.path.expanduser("~")
+CONFIG_DIR = os.path.join(USER_HOME, ".ffcli")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "ffmpeg_commands.json")
 
 last_manual_cmd = ""
 last_manual_ext = ""
+
+# Default built-in presets
+DEFAULT_COMMANDS = {
+    "Compress Video (H.264 - Quality)": {
+        "cmd": "-c:v libx264 -crf 23 -preset medium -c:a aac -b:a 128k",
+        "ext": ".mp4"
+    },
+    "Extract MP3 Audio (High Quality)": {
+        "cmd": "-vn -c:a libmp3lame -q:a 2",
+        "ext": ".mp3"
+    },
+    "Speed Up Video 2x (2x Speed)": {
+        "cmd": '-filter:v "setpts=0.5*PTS" -filter:a "atempo=2.0"',
+        "ext": ".mp4"
+    },
+    "Create GIF from Video (Lanczos 15fps)": {
+        "cmd": '-vf "fps=15,scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"',
+        "ext": ".gif"
+    },
+    "Convert Container to MKV (No Encode)": {
+        "cmd": "-c copy",
+        "ext": ".mkv"
+    }
+}
 
 def load_commands():
     commands = {}
@@ -74,23 +99,30 @@ def load_commands():
     
     if updated or not commands:
         if not commands:
-            commands = {"Convert to MP4": {"cmd": "-c:v libx264 -crf 23", "ext": ".mp4"}}
+            commands = DEFAULT_COMMANDS.copy()
         save_commands(commands)
         
     return commands
 
 def save_commands(commands):
-    with open(CONFIG_FILE, "w", encoding='utf-8') as f: 
-        json.dump(commands, f, indent=4, ensure_ascii=False)
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CONFIG_FILE, "w", encoding='utf-8') as f: 
+            json.dump(commands, f, indent=4, ensure_ascii=False)
+    except: pass
 
 def get_key():
-    """Đọc phím từ bàn phím hỗ trợ enter, esc, backspace và ký tự thường"""
+    """Read key supporting enter, esc, backspace, arrow keys, and printable characters"""
     if os.name == 'nt':
         import msvcrt
         key = msvcrt.getch()
         if key in (b'\x00', b'\xe0'):
-            # Bỏ qua phím mũi tên đặc biệt
-            msvcrt.getch()
+            # Function / arrow keys on Windows
+            sub_key = msvcrt.getch()
+            if sub_key == b'H': return 'up'
+            if sub_key == b'P': return 'down'
+            if sub_key == b'K': return 'left'
+            if sub_key == b'M': return 'right'
             return None
         if key == b'\r': return 'enter'
         if key == b'\x1b': return 'esc'
@@ -102,19 +134,30 @@ def get_key():
             if char.isprintable(): return char
         except: pass
     else:
-        import tty, termios
+        import tty, termios, select
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         try:
-            tty.setraw(sys.stdin.fileno())
+            tty.setraw(fd)
             ch = sys.stdin.read(1)
             if ch == '\x1b':
+                # Check escape sequence for Unix arrow keys
+                rlist, _, _ = select.select([sys.stdin], [], [], 0.05)
+                if rlist:
+                    ch2 = sys.stdin.read(1)
+                    if ch2 == '[':
+                        ch3 = sys.stdin.read(1)
+                        if ch3 == 'A': return 'up'
+                        if ch3 == 'B': return 'down'
+                        if ch3 == 'C': return 'right'
+                        if ch3 == 'D': return 'left'
                 return 'esc'
             if ch == '\r': return 'enter'
             if ch == ' ': return 'space'
             if ch in ('\x08', '\x7f'): return 'backspace'
             if ch == '\x03': raise KeyboardInterrupt
             if ch.isprintable(): return ch
+        except: pass
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return None
@@ -166,6 +209,9 @@ def interactive_menu(title, options, subtitle=None, max_visible=None, multi_sele
     selected_index = 0
     selected_items = set()
     
+    # Xóa màn hình một lần duy nhất bằng mã ANSI cực nhanh khi mở menu
+    print("\033[2J\033[H", end="")
+    
     while True:
         filtered_indices = []
         if enable_search:
@@ -193,7 +239,8 @@ def interactive_menu(title, options, subtitle=None, max_visible=None, multi_sele
         if limit > max_possible: limit = max_possible
         if limit < 5: limit = 5
         
-        os.system('cls' if os.name == 'nt' else 'clear')
+        # Di chuyển con trỏ về góc trên trái thay vì dùng os.system để chống giật/nhấp nháy
+        print(UI.HOME_CURSOR, end="")
         print(UI.HIDE_CURSOR, end="")
         
         print(f"{UI.HEADER}{UI.BOLD}=== {title} ==={UI.END}\033[K")
@@ -250,16 +297,16 @@ def interactive_menu(title, options, subtitle=None, max_visible=None, multi_sele
             else: print("\033[K")
             
         scroll_info = f" | Showing {start_index+1}-{end_index} of {num_options}" if limit < num_options else ""
-        help_text = "w/s: Move | f/Enter: Confirm | Esc: Back"
+        help_text = "↑/↓: Move | Enter: Confirm | Esc: Back"
         if multi_select: help_text += " | Space: Toggle"
         
         print(f"{UI.CYAN}({help_text}){scroll_info}{UI.END}\033[K")
         print('\033[J', end="") 
         
         key = get_key()
-        move_up = key == 'w'
-        move_down = key == 's'
-        is_confirm = key == 'enter' or key == 'f'
+        move_up = key == 'up'
+        move_down = key == 'down'
+        is_confirm = key == 'enter'
         is_back = key == 'esc'
         
         if move_up:
@@ -317,9 +364,7 @@ def interactive_menu(title, options, subtitle=None, max_visible=None, multi_sele
             print(UI.SHOW_CURSOR, end="")
             return [] if multi_select else -1
         elif key and len(key) == 1:
-            if key in ('w', 's', 'f'):
-                pass
-            elif key.isdigit() or key.isalpha():
+            if key.isdigit() or key.isalpha():
                 for orig_idx in filtered_indices:
                     if orig_idx == -2: continue
                     opt_str = options[orig_idx].strip()
@@ -544,8 +589,8 @@ def manage_commands(commands):
             else:
                 for idx, (k, v) in enumerate(commands.items(), 1):
                     print(f" {UI.CYAN}{UI.BOLD}Preset #{idx}: {k}{UI.END}")
-                    print(f"   {UI.WHITE}- Extension:{UI.END} {UI.YELLOW}{v['ext']}{UI.END}")
-                    print(f"   {UI.WHITE}- Options:  {UI.END} {UI.GRAY}{v['cmd']}{UI.END}")
+                    print(f"   {UI.WHITE}- Output Extension:{UI.END} {UI.YELLOW}{v['ext']}{UI.END}")
+                    print(f"   {UI.WHITE}- Options:         {UI.END} {UI.GRAY}{v['cmd']}{UI.END}")
                     print(f" {UI.GRAY}----------------------------------------{UI.END}")
             input("\nPress Enter to return...")
             
@@ -560,7 +605,15 @@ def manage_commands(commands):
                     print(f"{UI.RED}No presets to edit!{UI.END}")
                     input("Press Enter...")
                     continue
-                e_idx = interactive_menu("SELECT PRESET TO EDIT", names)
+                
+                max_name_len = max(len(k) for k in names)
+                menu_options = []
+                for k in names:
+                    v = commands[k]
+                    line = f"{UI.CYAN}{k.ljust(max_name_len)}{UI.END} | {UI.YELLOW}{v['ext'].rjust(6)}{UI.END} | {UI.GRAY}{v['cmd'][:80]}...{UI.END}" if len(v['cmd']) > 80 else f"{UI.CYAN}{k.ljust(max_name_len)}{UI.END} | {UI.YELLOW}{v['ext'].rjust(6)}{UI.END} | {UI.GRAY}{v['cmd']}{UI.END}"
+                    menu_options.append(line)
+                
+                e_idx = interactive_menu("SELECT PRESET TO EDIT", menu_options)
                 if e_idx == -1: continue
                 old_name = names[e_idx]
                 data = commands[old_name]
@@ -568,7 +621,7 @@ def manage_commands(commands):
             fields = [
                 ("name", "Name", old_name if is_edit else "New Preset"),
                 ("cmd",  "Options", data["cmd"]),
-                ("ext",  "Extension", data["ext"])
+                ("ext",  "Output Extension", data["ext"])
             ]
             
             new_values = {}
@@ -578,13 +631,14 @@ def manage_commands(commands):
                 os.system('cls' if os.name == 'nt' else 'clear')
                 title = "EDIT PRESET" if is_edit else "ADD NEW PRESET"
                 print(f"{UI.HEADER}{UI.BOLD}=== {title} ==={UI.END}")
-                print(f"{UI.CYAN}(Type 'exit' to cancel, Enter to keep/default){UI.END}\n")
+                print(f"{UI.CYAN}(Esc or type 'exit' to cancel, Enter to keep/default){UI.END}\n")
                 
                 print(f" {UI.GRAY}----------------------------------------{UI.END}")
                 for j, (f_key, f_label, f_curr) in enumerate(fields):
                     if i == j:
                         if f_key == "ext" and not f_curr: f_curr = "."
-                        prompt_str = f" {UI.BOLD}{UI.YELLOW}➜ {f_label}:{UI.END} {UI.WHITE}(Current: {f_curr}){UI.END}\n   {UI.BOLD}New Value > {UI.END}"
+                        print(f" {UI.BOLD}{UI.YELLOW}➜ {f_label}:{UI.END} {UI.WHITE}(Current: {f_curr}){UI.END}")
+                        prompt_str = f"   {UI.BOLD}New Value > {UI.END}"
                         val = interactive_input(prompt_str, f_curr if is_edit else ("." if f_key == "ext" else ""))
                         if val is None or val.strip().lower() == 'exit':
                             cancelled = True
@@ -620,17 +674,160 @@ def manage_commands(commands):
             menu_options = []
             for k in names:
                 v = commands[k]
-                line = f"{k.ljust(max_name_len)} | {v['ext'].rjust(5)} | {v['cmd'][:80]}..." if len(v['cmd']) > 80 else f"{k.ljust(max_name_len)} | {v['ext'].rjust(5)} | {v['cmd']}"
+                line = f"{UI.CYAN}{k.ljust(max_name_len)}{UI.END} | {UI.YELLOW}{v['ext'].rjust(6)}{UI.END} | {UI.GRAY}{v['cmd'][:80]}...{UI.END}" if len(v['cmd']) > 80 else f"{UI.CYAN}{k.ljust(max_name_len)}{UI.END} | {UI.YELLOW}{v['ext'].rjust(6)}{UI.END} | {UI.GRAY}{v['cmd']}{UI.END}"
                 menu_options.append(line)
             
             d_idx = interactive_menu("SELECT PRESET TO DELETE", menu_options)
             if d_idx != -1:
                 target_name = names[d_idx]
-                confirm = interactive_menu(f"CONFIRM DELETE: {target_name}?", ["1. No, Cancel", "2. Yes, Delete It"])
+                confirm = interactive_menu(
+                    f"DELETE PRESET: {target_name}",
+                    [
+                        f"{UI.WHITE}No, Keep Preset{UI.END}",
+                        f"{UI.RED}Yes, Delete It{UI.END}"
+                    ],
+                    subtitle="This action cannot be undone! Are you absolutely sure?"
+                )
                 if confirm == 1:
                     del commands[target_name]
                     save_commands(commands)
+                    print(f"\n {UI.GREEN}✓ Deleted preset '{target_name}' successfully!{UI.END}")
+                    import time
+                    time.sleep(1)
         else: break
+
+def select_file_dialog(title, save_mode=False, filetypes=None, default_name=""):
+    """Displays a native file selection dialog (Windows/Linux) using tkinter"""
+    if filetypes is None:
+        filetypes = [("JSON Files", "*.json"), ("All Files", "*.*")]
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw() # Hide root window
+        root.attributes("-topmost", True) # Bring to front
+        
+        if save_mode:
+            path = filedialog.asksaveasfilename(
+                title=title, 
+                defaultextension=".json", 
+                filetypes=filetypes, 
+                initialfile=default_name
+            )
+        else:
+            path = filedialog.askopenfilename(
+                title=title, 
+                filetypes=filetypes
+            )
+        root.destroy()
+        return path if path else None
+    except:
+        return None
+
+def settings_menu(commands):
+    while True:
+        opts = [
+            "1. Export Presets (Save config to file)",
+            "2. Import Presets (Overwrite current config)",
+            "3. Uninstall Tool (Clear configuration directory)",
+            "--------------------------",
+            "0. Back"
+        ]
+        choice = interactive_menu("SETTINGS & TOOLS", opts)
+        if choice == -1 or choice == 4: break # Back or Esc
+        
+        if choice == 0: # Export Presets
+            os.system('cls' if os.name == 'nt' else 'clear')
+            print(f"{UI.HEADER}=== EXPORT PRESETS ==={UI.END}")
+            print(f"{UI.GRAY}Opening file dialog... Please select where to save your presets.{UI.END}\n")
+            
+            # Mở hộp thoại lưu file native
+            export_path = select_file_dialog(
+                "Export Presets JSON", 
+                save_mode=True, 
+                default_name="ffmpeg_commands_backup.json"
+            )
+            
+            # Fallback nếu người dùng hủy hoặc không có tkinter
+            if export_path is None:
+                print(f"{UI.GRAY}File dialog closed or unavailable. Falling back to manual entry.{UI.END}")
+                export_path = interactive_input("Export path > ", "ffmpeg_commands_backup.json")
+                
+            if export_path:
+                export_path = export_path.strip()
+                try:
+                    import shutil
+                    shutil.copy(CONFIG_FILE, export_path)
+                    print(f"\n {UI.GREEN}✓ Exported presets to '{export_path}' successfully!{UI.END}")
+                except Exception as e:
+                    print(f"\n {UI.RED}✗ Export failed: {e}{UI.END}")
+                input("\nPress Enter to continue...")
+                
+        elif choice == 1: # Import Presets
+            os.system('cls' if os.name == 'nt' else 'clear')
+            print(f"{UI.HEADER}=== IMPORT PRESETS ==={UI.END}")
+            print(f"{UI.GRAY}Opening file dialog... Please select your presets JSON file.{UI.END}\n")
+            
+            # Mở hộp thoại mở file native
+            import_path = select_file_dialog("Import Presets JSON")
+            
+            # Fallback nếu người dùng hủy hoặc không có tkinter
+            if import_path is None:
+                print(f"{UI.GRAY}File dialog closed or unavailable. Falling back to manual entry.{UI.END}")
+                import_path = interactive_input("Import path > ", "ffmpeg_commands_backup.json")
+                
+            if import_path:
+                import_path = import_path.strip()
+                if os.path.exists(import_path):
+                    try:
+                        with open(import_path, 'r', encoding='utf-8') as f:
+                            imported_data = json.load(f)
+                        
+                        if isinstance(imported_data, dict):
+                            # Basic schema validation
+                            valid = True
+                            for k, v in imported_data.items():
+                                if not isinstance(v, dict) or "cmd" not in v or "ext" not in v:
+                                    valid = False
+                                    break
+                            if valid:
+                                commands.clear()
+                                commands.update(imported_data)
+                                save_commands(commands)
+                                print(f"\n {UI.GREEN}✓ Imported successfully and updated config file!{UI.END}")
+                            else:
+                                print(f"\n {UI.RED}✗ Invalid preset schema! Must contain 'cmd' and 'ext' keys.{UI.END}")
+                        else:
+                            print(f"\n {UI.RED}✗ Invalid format! The file must be a JSON dictionary.{UI.END}")
+                    except Exception as e:
+                        print(f"\n {UI.RED}✗ Import failed: {e}{UI.END}")
+                else:
+                    print(f"\n {UI.RED}✗ File not found at '{import_path}'!{UI.END}")
+                input("\nPress Enter to continue...")
+                
+        elif choice == 2: # Uninstall Tool
+            confirm = interactive_menu(
+                "UNINSTALL FFCLI CONFIG",
+                [
+                    f"{UI.WHITE}No, Keep Everything{UI.END}",
+                    f"{UI.RED}Yes, Delete Config Directory (~/.ffcli){UI.END}"
+                ],
+                subtitle="This will delete the configuration folder and presets. The app will exit."
+            )
+            if confirm == 1:
+                import shutil
+                try:
+                    if os.path.exists(CONFIG_DIR):
+                        shutil.rmtree(CONFIG_DIR)
+                    print(f"\n {UI.GREEN}✓ Config directory deleted successfully. Goodbye!{UI.END}")
+                    import time
+                    time.sleep(2)
+                    print(UI.SHOW_CURSOR, end="")
+                    os.system('cls' if os.name == 'nt' else 'clear')
+                    os._exit(0)
+                except Exception as e:
+                    print(f"\n {UI.RED}✗ Uninstall failed: {e}{UI.END}")
+                    input("\nPress Enter to continue...")
 
 def main():
     commands = load_commands()
@@ -639,12 +836,14 @@ def main():
         choice = interactive_menu("FFmpeg Tool (by Natelyt)", [
             "1. Process Media", 
             "2. Manage Presets", 
+            "3. Settings & Tools",
             "--------------------------", 
             "0. Exit"
         ], subtitle=f"Currently in: {cwd}")
         if choice == 0: run_process_flow(commands)
         elif choice == 1: manage_commands(commands)
-        elif choice == 3 or choice == -1: 
+        elif choice == 2: settings_menu(commands)
+        elif choice == 4 or choice == -1: 
             print(UI.SHOW_CURSOR, end="")
             os.system('cls' if os.name == 'nt' else 'clear')
             os._exit(0) # Buộc đóng terminal process
