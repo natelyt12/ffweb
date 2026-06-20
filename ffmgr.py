@@ -29,11 +29,13 @@ class Media:
 
     @staticmethod
     def get_label(filename):
-        ext = os.path.splitext(filename)[1].lower()
-        if ext in Media.VIDEO: return f"{UI.HEADER}[VIDEO]{UI.END}"
-        if ext in Media.AUDIO: return f"{UI.BLUE}[AUDIO]{UI.END}"
-        if ext in Media.IMAGE: return f"{UI.YELLOW}[IMAGE]{UI.END}"
-        return f"{UI.GRAY}[FILE]{UI.END}"
+        orig_ext = os.path.splitext(filename)[1].lower()
+        ext_name = orig_ext.replace('.', '').upper()
+        ext_str = f"[{ext_name}]".ljust(7) if ext_name else "[FILE] ".ljust(7)
+        if orig_ext in Media.VIDEO: return f"{UI.HEADER}{ext_str}{UI.END}"
+        if orig_ext in Media.AUDIO: return f"{UI.BLUE}{ext_str}{UI.END}"
+        if orig_ext in Media.IMAGE: return f"{UI.YELLOW}{ext_str}{UI.END}"
+        return f"{UI.GRAY}{ext_str}{UI.END}"
 
     @staticmethod
     def get_size_str(filepath):
@@ -355,7 +357,7 @@ def interactive_menu(title, options, subtitle=None, max_visible=None, multi_sele
                     print(UI.HIDE_CURSOR, end="")
                     if multi_select:
                         if not selected_items:
-                            return [i for i in filtered_indices if i != -2 and "---" not in options[i] and i not in toggle_groups]
+                            continue
                         return [i for i in selected_items if i not in toggle_groups]
                     else:
                         return orig_idx
@@ -397,7 +399,7 @@ def run_process_flow(commands):
     toggler_indices = []
     for ext in exts:
         count = sum(1 for f in files if os.path.splitext(f)[1].lower() == ext)
-        if count > 1:
+        if count > 0:
             menu_options.append(f"{UI.YELLOW}⬚ Select ALL {ext}{UI.END}")
             toggler_indices.append(ext)
             
@@ -416,7 +418,7 @@ def run_process_flow(commands):
                 target_indices.append(file_start_idx + j)
         toggle_groups[i] = target_indices
 
-    subtitle = "Space: Toggle | Enter: Confirm (If 0 selected, ALL visible are chosen) | Type to search"
+    subtitle = "Space: Toggle | Enter: Confirm | Type to search"
     sel_indices = interactive_menu("SELECT MEDIA FILES", menu_options, subtitle=subtitle, multi_select=True, enable_search=True, toggle_groups=toggle_groups)
     
     if not sel_indices: return
@@ -477,13 +479,34 @@ def run_process_flow(commands):
             cmd_template = interactive_input(prompt1, last_manual_cmd)
             if cmd_template is None or cmd_template.strip().lower() == 'exit': continue
             
+            cmd_template = cmd_template.strip()
+            detected_ext = None
+            if cmd_template.startswith("ffmpeg"):
+                import shlex
+                try:
+                    tokens = shlex.split(cmd_template, posix=False)
+                    if '-i' in tokens:
+                        i_idx = tokens.index('-i')
+                        args_after = tokens[i_idx+2:]
+                        if args_after and not args_after[-1].startswith('-'):
+                            last_token = args_after[-1].strip('"').strip("'")
+                            ext = os.path.splitext(last_token)[1].lower()
+                            if ext:
+                                detected_ext = ext
+                                args_after = args_after[:-1]
+                        cmd_template = " ".join(args_after)
+                        print(f"\n{UI.GREEN}➜ Extracted options from pasted command:{UI.END} {cmd_template}")
+                        if detected_ext:
+                            print(f"{UI.GREEN}➜ Extracted extension:{UI.END} {detected_ext}")
+                except Exception:
+                    pass
+
             print()
             prompt2 = f"{UI.BOLD}Output extension{UI.END} {UI.GRAY}(e.g. .mp4) [Leave blank to keep original]:{UI.END} "
-            default_ext = os.path.splitext(sel_files[0])[1].lower() if sel_files else ".mp4"
+            default_ext = detected_ext if detected_ext else (os.path.splitext(sel_files[0])[1].lower() if sel_files else ".mp4")
             output_ext = interactive_input(prompt2, default_ext)
             if output_ext is None: continue
             
-            cmd_template = cmd_template.strip()
             output_ext = output_ext.strip()
             last_manual_cmd = cmd_template
             last_manual_ext = output_ext
