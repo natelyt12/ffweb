@@ -112,7 +112,7 @@ You can add your own custom presets anytime in the **Presets Manager** tab.
 ## 📂 Project Structure
 
 ```text
-ffcli/
+ffweb/
 ├── ffweb.py               # Main Python server (pure standard library)
 ├── ffmpeg_commands.json   # Presets database
 ├── ffweb.bat              # Windows batch launcher
@@ -132,4 +132,4 @@ ffcli/
 
 ## 📄 License & Author
 
-Created by [natelyt12](https://github.com/natelyt12). Open source under the MIT License.
+Created by [natelyt12](https://github.com/natelyt12/ffweb). Open source under the MIT License.
