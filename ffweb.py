@@ -1,4 +1,4 @@
-# ffweb.py - Standalone local server for ffmpeg in the web
+# ffweb.py - Standalone local server for ffmpeg on the web
 # Zero external dependencies (Python standard library only)
 import json
 import mimetypes
@@ -716,7 +716,7 @@ def try_connect_and_switch(port, target_dir):
                 res_body = json.loads(resp.read().decode("utf-8"))
                 if res_body.get("success"):
                     print("\n" + "=" * 45)
-                    print("           ffmpeg in the web")
+                    print("           ffmpeg on the web")
                     print("=" * 45)
                     print(f" -> Connected to existing server at: http://127.0.0.1:{port}")
                     print(f" -> Switched active folder to:       {target_dir}")
@@ -748,7 +748,7 @@ def start_server(port=PORT, auto_open=True, initial_dir=None):
     url = f"http://127.0.0.1:{port}"
     
     print("\n" + "=" * 45)
-    print("           ffmpeg in the web")
+    print("           ffmpeg on the web")
     print("=" * 45)
     print(f" -> Local Dashboard:   {url}")
     print(f" -> Active Directory:  {current_working_dir}")

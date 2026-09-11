@@ -1,23 +1,20 @@
-# ffweb - ffmpeg in the web
+# ffweb - ffmpeg on the web
 
-A modern, ultra-lightweight web dashboard for batch media conversion powered by **FFmpeg**. Built with **0 external pip dependencies** using pure Python standard library.
+A modern, lightweight web dashboard for processing media with **FFmpeg** right from your browser. Built with **0 external pip dependencies** using pure Python standard library.
 
-Runs everywhere: **Windows**, **Linux**, **macOS**, and **Android (Termux)**.
+Runs seamlessly on **Windows**, **Linux**, **macOS**, and **Android (Termux)**.
 
 ---
 
-## ✨ Features
+## 💡 What You Can Do with ffweb
 
-- **Zero Pip Dependencies**: Runs 100% on standard Python (`http.server`, `threading`, `subprocess`). No `pip install flask`, `fastapi`, or heavy frameworks required.
-- **Modern Clean Flat UI**: Pastel dark theme with crisp **Lucide Icons** and high-density pro layout.
-- **In-Browser Media Preview**: Watch videos, listen to audios, or view images directly in your browser with smooth seeking before converting.
-- **Batch Processing with Concurrency (1–4 Workers)**: Convert multiple media files sequentially or up to 4 files in parallel.
-- **Real-Time Progress & Metrics**: Live encoding progress bar with active file name, encoding speed (e.g. `2.8x`), and FPS.
-- **Live FFmpeg Log Modal**: Click any task in the queue to inspect full command arguments and stderr output in real time, with a one-click `Copied!` button.
-- **Explorer File Management**: Rename or delete media files directly from the explorer table with safety locks during active conversions.
-- **Instant Rollback on Cancel**: Cancel individual tasks or cancel the whole batch with automatic cleanup of unfinished output files.
-- **Preset Manager**: Easily create, edit, customize, and delete your FFmpeg presets stored in `ffmpeg_commands.json`.
-- **Dynamic Folder Switching**: Type `ffweb` in any folder, enter a directory path in the browser, or pick a folder with the native folder dialog.
+- **Batch convert media in seconds**: Select multiple videos, audios, or images from your folder, pick an optimized preset, and convert them in one go. Run conversions sequentially or with up to **4 parallel workers** to speed things up.
+- **Preview media right in your browser**: Watch videos, listen to music tracks, or check images with smooth seeking before converting—no external players needed.
+- **Rename or delete files on the spot**: Rename files or clean up unwanted originals directly from the web interface without switching back and forth to File Explorer.
+- **Watch real-time speed & inspect full logs**: Monitor live progress percentage, encoding speed multiplier (e.g. `2.8x`), and FPS. Click any task to inspect the exact FFmpeg command and live terminal logs, with a one-click `Copied!` button.
+- **Cancel safely without leaving broken files**: Skip an individual file or cancel the whole batch with a single click—any unfinished output files are automatically cleaned up immediately.
+- **Create and manage custom presets**: Choose from built-in recipes (universal playback, maximum compression, audio extraction) or save your own custom FFmpeg commands in the Presets tab.
+- **Launch from anywhere with zero setup**: Click the address bar of any folder in Windows Explorer (or terminal), type `ffweb`, and the dashboard opens automatically at that folder. No Flask, Node.js, or pip installs needed.
 
 ---
 
@@ -32,13 +29,13 @@ Runs everywhere: **Windows**, **Linux**, **macOS**, and **Android (Termux)**.
 
 ### 🖥️ Windows
 
-Open a terminal or click on the address bar of any folder in **Windows Explorer**, type `ffweb`, and press Enter:
+Open a terminal or click the address bar in any folder in **Windows Explorer**, type `ffweb`, and press Enter:
 
 ```cmd
 ffweb
 ```
 
-Or pass a specific media folder path directly:
+Or pass a media folder path directly:
 
 ```cmd
 ffweb "D:\Videos\Movies"
@@ -55,7 +52,7 @@ Make the script executable (first time only) and run:
 ```bash
 chmod +x ffweb
 ./ffweb
-# or pass a folder:
+# or specify a folder:
 ./ffweb /path/to/media
 ```
 
@@ -63,9 +60,9 @@ chmod +x ffweb
 
 ### 📱 Android (Termux)
 
-You can run `ffweb` on your Android phone using Termux:
+You can run `ffweb` directly on your Android device:
 
-1. Install **Termux** (from F-Droid) and set up storage:
+1. Install **Termux** (from F-Droid) and grant storage permission:
    ```bash
    termux-setup-storage
    ```
@@ -77,7 +74,7 @@ You can run `ffweb` on your Android phone using Termux:
    ```bash
    python ffweb.py ~/storage/shared/DCIM
    ```
-   *(Or run `./ffweb` after `chmod +x ffweb`). The dashboard will automatically open in your mobile browser via `termux-open-url`!*
+   *(Or `./ffweb`). The web dashboard will automatically open in your mobile browser via `termux-open-url`!*
 
 ---
 
@@ -88,10 +85,10 @@ You can run `ffweb` on your Android phone using Termux:
 2. Click **Edit the system environment variables** $\rightarrow$ **Environment Variables**.
 3. Under **User variables**, select `Path` and click **Edit**.
 4. Click **New** and paste the folder path containing `ffweb.bat`.
-5. Click **OK**. Now you can open terminal or type `ffweb` in the Explorer address bar in any folder!
+5. Click **OK**. Now you can type `ffweb` in any terminal or Windows Explorer address bar!
 
 ### Linux / macOS / Termux
-Add an alias or link to `/usr/local/bin` (or `~/.bashrc`):
+Add an alias to your `~/.bashrc` or `~/.zshrc`:
 
 ```bash
 echo "alias ffweb='python3 $(pwd)/ffweb.py'" >> ~/.bashrc
@@ -123,6 +120,7 @@ ffcli/
 ├── ffweb                  # Linux / macOS / Termux bash launcher
 ├── ffcli                  # Linux / Termux backward compatibility wrapper
 ├── .gitignore             # Standard repository ignore rules
+├── .gitattributes         # Enforce LF endings on shell scripts
 ├── README.md              # Documentation
 └── web/
     ├── index.html         # Frontend HTML structure
