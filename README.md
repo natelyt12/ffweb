@@ -1,94 +1,137 @@
-# FFCLI - FFmpeg CLI Manager
+# ffweb - ffmpeg in the web
 
-An interactive command-line interface designed to streamline media processing workflows using FFmpeg, optimized for both **Windows** and **Android (Termux)**.
+A modern, ultra-lightweight web dashboard for batch media conversion powered by **FFmpeg**. Built with **0 external pip dependencies** using pure Python standard library.
 
----
-
-## Features
-
-- **Multi-Platform Support**: Dedicated versions for Windows (`ffmgr.py`) and Android (`ffmgr_android.py`) for optimized compatibility.
-- **Unified Keyboard Controls (WASD + F)**:
-  - **`w`**: Move selection up.
-  - **`s`**: Move selection down.
-  - **`f`** or **`Enter`**: Confirm/Proceed.
-  - **`Esc`**: Back/Cancel (removes key mapping conflicts with native terminal keyboard shortcuts).
-- **Clickable Virtual Search Button**:
-  - `🔍 Search` is now represented as a dedicated, clickable option at the top of lists. Confirming it opens a safe input prompt via `interactive_input` to filter lists, preventing navigation keys from colliding with live typing filters.
-- **Auto-Suggested Input Extension**:
-  - When writing custom FFmpeg commands (`[Manual] Enter Custom FFmpeg Command`), the program automatically suggests the exact extension of the first selected input file as the default output format.
-- **Preset Block Layouts**:
-  - Horizontal preset tables are refactored into modern, clean vertical block layouts separated by subtle dividers, ensuring full responsiveness on small mobile screens.
-- **Smart Android Directory Browser (`ffmgr_android.py`)**:
-  - Visually lists folders in white (`📁 `) and files in muted gray (`📄 `).
-  - Preventative guardrails: Automatically hides the `< back` navigation option when inside storage base directories (e.g., `/storage/emulated/0`) and safely redirects the user to their Termux Home directory if directory access failures occur, preventing infinite terminal freeze loops.
-- **Automatic Media Discovery**: Automatically scans the current working directory for supported video, audio, and image formats.
-- **Integrated Utilities**: Fast metadata viewer powered by `ffprobe` and safe native file launching.
+Runs everywhere: **Windows**, **Linux**, **macOS**, and **Android (Termux)**.
 
 ---
 
-## Prerequisites
+## ✨ Features
 
-1. **Python 3.x**: Must be installed and configured in your path environment.
-2. **FFmpeg**: Both `ffmpeg` and `ffprobe` binaries must be installed and accessible.
+- **Zero Pip Dependencies**: Runs 100% on standard Python (`http.server`, `threading`, `subprocess`). No `pip install flask`, `fastapi`, or heavy frameworks required.
+- **Modern Clean Flat UI**: Pastel dark theme with crisp **Lucide Icons** and high-density pro layout.
+- **In-Browser Media Preview**: Watch videos, listen to audios, or view images directly in your browser with smooth seeking before converting.
+- **Batch Processing with Concurrency (1–4 Workers)**: Convert multiple media files sequentially or up to 4 files in parallel.
+- **Real-Time Progress & Metrics**: Live encoding progress bar with active file name, encoding speed (e.g. `2.8x`), and FPS.
+- **Live FFmpeg Log Modal**: Click any task in the queue to inspect full command arguments and stderr output in real time, with a one-click `Copied!` button.
+- **Explorer File Management**: Rename or delete media files directly from the explorer table with safety locks during active conversions.
+- **Instant Rollback on Cancel**: Cancel individual tasks or cancel the whole batch with automatic cleanup of unfinished output files.
+- **Preset Manager**: Easily create, edit, customize, and delete your FFmpeg presets stored in `ffmpeg_commands.json`.
+- **Dynamic Folder Switching**: Type `ffweb` in any folder, enter a directory path in the browser, or pick a folder with the native folder dialog.
 
 ---
 
-## Installation & Setup
+## 📋 Prerequisites
 
-### 🖥️ Windows Setup
-1. Clone or download this repository:
-   ```bash
-   git clone https://github.com/natelyt12/ffcli.git
-   cd ffcli
-   ```
-2. (Optional) To launch `ffcli` from any directory, add the folder path of this repository to your system's Environment Variables (`PATH`). You can then launch it instantly by typing:
-   ```cmd
-   ffcli
-   ```
+1. **Python 3.8+** installed and available in your `PATH`.
+2. **FFmpeg & FFprobe** installed and available in your `PATH`.
 
-### 📱 Android (Termux) Setup
-1. Download and install **Termux** (strongly recommended to install the latest build from [F-Droid](https://f-droid.org/en/packages/com.termux/)).
-2. Grant storage permission to Termux by running:
+---
+
+## 🚀 Quick Start
+
+### 🖥️ Windows
+
+Open a terminal or click on the address bar of any folder in **Windows Explorer**, type `ffweb`, and press Enter:
+
+```cmd
+ffweb
+```
+
+Or pass a specific media folder path directly:
+
+```cmd
+ffweb "D:\Videos\Movies"
+```
+
+*(Note: `ffcli` also works and automatically redirects to `ffweb`)*.
+
+---
+
+### 🐧 Linux & 🍎 macOS
+
+Make the script executable (first time only) and run:
+
+```bash
+chmod +x ffweb
+./ffweb
+# or pass a folder:
+./ffweb /path/to/media
+```
+
+---
+
+### 📱 Android (Termux)
+
+You can run `ffweb` on your Android phone using Termux:
+
+1. Install **Termux** (from F-Droid) and set up storage:
    ```bash
    termux-setup-storage
    ```
-   *Accept the system storage permission prompt.*
-3. Install dependencies:
+2. Install Python and FFmpeg:
    ```bash
-   pkg update && pkg upgrade -y
-   pkg install python ffmpeg termux-api -y
+   pkg update && pkg install python ffmpeg -y
    ```
-4. Transfer `ffmgr_android.py` and `ffmpeg_commands.json` to your phone (e.g., into your phone's `Download` directory).
-5. Open Termux, navigate to the folder, and run:
+3. Navigate to the project folder and launch:
    ```bash
-   cd /sdcard/Download
-   python ffmgr_android.py
+   python ffweb.py ~/storage/shared/DCIM
    ```
-6. **Pro-tip (Create a command shortcut):**
-   Run the following in Termux to create a quick alias:
-   ```bash
-   echo "alias ffcli='python /sdcard/Download/ffmgr_android.py'" >> ~/.bashrc
-   source ~/.bashrc
-   ```
-   Now you can just type `ffcli` from anywhere in Termux to open the app!
+   *(Or run `./ffweb` after `chmod +x ffweb`). The dashboard will automatically open in your mobile browser via `termux-open-url`!*
 
 ---
 
-## Usage Controls
+## 🛠️ Adding to System PATH (Run from Anywhere)
 
-* **`w` / `s`**: Navigate Menu Items (Up/Down)
-* **`f` / `Enter`**: Confirm Selection / Action
-* **`Space`**: Toggle items (in multi-select screens)
-* **`Esc`**: Go Back / Cancel current dialog or prompt
+### Windows
+1. Press `Win + S` and search for **Environment Variables**.
+2. Click **Edit the system environment variables** $\rightarrow$ **Environment Variables**.
+3. Under **User variables**, select `Path` and click **Edit**.
+4. Click **New** and paste the folder path containing `ffweb.bat`.
+5. Click **OK**. Now you can open terminal or type `ffweb` in the Explorer address bar in any folder!
+
+### Linux / macOS / Termux
+Add an alias or link to `/usr/local/bin` (or `~/.bashrc`):
+
+```bash
+echo "alias ffweb='python3 $(pwd)/ffweb.py'" >> ~/.bashrc
+source ~/.bashrc
+```
 
 ---
 
-## Project Structure
+## ⚙️ Built-in Presets
 
-- `ffmgr.py`: The CLI manager application optimized for **Windows** environments.
-- `ffmgr_android.py`: The CLI manager application optimized for **Android (Termux)**, removing unsafe preview functions and featuring sandboxed directory protections.
-- `ffmpeg_commands.json`: A JSON database storing your saved FFmpeg command presets.
-- `ffcli.bat`: A lightweight batch wrapper for simple launch execution on Windows.
+| Preset | FFmpeg Arguments | Output | Best For |
+| :--- | :--- | :---: | :--- |
+| **Universal Video** | `-c:v libx264 -crf 18 -preset slow -pix_fmt yuv420p -profile:v high -level 4.1 -movflags +faststart -c:a aac -b:a 256k` | `.mp4` | 100% playback compatibility across all devices, TVs, and web browsers with visually lossless quality. |
+| **Max Compression** | `-c:v libx265 -crf 24 -preset medium -tag:v hvc1 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 128k` | `.mp4` | H.265 HEVC compression saving 50% to 75% file size while preserving high visual fidelity. |
+| **Extract MP3 Audio** | `-vn -c:a libmp3lame -q:a 2` | `.mp3` | High quality VBR MP3 extraction from media files containing an audio stream. |
+
+You can add your own custom presets anytime in the **Presets Manager** tab.
 
 ---
-Developed by [natelyt12](https://github.com/natelyt12)
+
+## 📂 Project Structure
+
+```text
+ffcli/
+├── ffweb.py               # Main Python server (pure standard library)
+├── ffmpeg_commands.json   # Presets database
+├── ffweb.bat              # Windows batch launcher
+├── ffcli.bat              # Windows backward compatibility wrapper
+├── ffweb                  # Linux / macOS / Termux bash launcher
+├── ffcli                  # Linux / Termux backward compatibility wrapper
+├── .gitignore             # Standard repository ignore rules
+├── README.md              # Documentation
+└── web/
+    ├── index.html         # Frontend HTML structure
+    ├── style.css          # Styling & dark pastel theme
+    └── app.js             # Client logic, live polling & preview
+```
+
+---
+
+## 📄 License & Author
+
+Created by [natelyt12](https://github.com/natelyt12). Open source under the MIT License.

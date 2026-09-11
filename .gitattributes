@@ -1,0 +1,10 @@
+# Set default behavior to automatically normalize line endings
+* text=auto
+
+# Shell scripts must always use LF line endings for Linux and Termux
+ffweb text eol=lf
+ffcli text eol=lf
+*.sh text eol=lf
+
+# Windows batch files use CRLF
+*.bat text eol=crlf

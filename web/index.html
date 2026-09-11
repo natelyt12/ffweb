@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ffmpeg in the web</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet">
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+
+  <!-- Left Sidebar Navigation -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-pill">FFMPEG</div>
+      <div class="brand-text">in the web</div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <button class="nav-tab-btn active" onclick="switchTab('media')" id="navBtn-media">
+        <i data-lucide="film"></i>
+        <span>Media & Convert</span>
+      </button>
+      <button class="nav-tab-btn" onclick="switchTab('presets')" id="navBtn-presets">
+        <i data-lucide="sliders"></i>
+        <span>Presets Manager</span>
+      </button>
+    </nav>
+
+    <!-- Sidebar Bottom: Folder Selector -->
+    <div class="sidebar-footer">
+      <div class="folder-card">
+        <div class="folder-label">
+          <i data-lucide="folder" style="width: 12px; height: 12px;"></i>
+          <span>Working Directory</span>
+        </div>
+        <div class="folder-path" id="cwdBadge" title="Click to edit path directly" onclick="promptChangeFolder()">
+          Loading directory...
+        </div>
+        <div class="folder-btn-row">
+          <button class="btn btn-primary btn-sm" style="flex: 1;" onclick="selectFolderDialog()"
+            title="Choose folder via native file dialog">
+            <i data-lucide="folder-input"></i>
+            <span>Change</span>
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="openFolder()" title="Open folder in File Explorer">
+            <i data-lucide="external-link"></i>
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="loadFiles()" title="Refresh file list">
+            <i data-lucide="rotate-cw"></i>
+          </button>
+        </div>
+      </div>
+      <div style="margin-top: 10px;">
+        <button class="btn btn-secondary btn-sm"
+          style="width: 100%; font-size: 12px; color: var(--rose); border-color: rgba(243, 139, 168, 0.25);"
+          onclick="shutdownServer()" title="Stop background server">
+          <i data-lucide="power"></i>
+          <span>Shutdown Server</span>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Right Content Area -->
+  <div class="main-wrapper">
+
+    <!-- TAB 1: Media Files & Converter -->
+    <div class="tab-content active" id="tab-media">
+      <div class="content-topbar" style="margin: -16px -20px 14px -20px;">
+        <div class="tab-title-box">
+          <div class="tab-title">Media Processing Station</div>
+          <span class="badge badge-file" id="fileCountBadge">0 files</span>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-secondary btn-sm" onclick="loadFiles()">
+            <i data-lucide="refresh-cw"></i> Refresh
+          </button>
+        </div>
+      </div>
+
+      <div class="converter-grid">
+        <!-- Left: Media Files List -->
+        <section class="card explorer-card">
+          <div class="card-header">
+            <div class="card-title">
+              <i data-lucide="folder-open" style="color: var(--lavender);"></i>
+              <span>Directory Media</span>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="clearSelectionBtn" onclick="clearSelection()" disabled
+              title="Clear selection">
+              <i data-lucide="x"></i> Clear
+            </button>
+          </div>
+          <div class="card-body explorer-card-body">
+            <!-- Search & Type Filters -->
+            <div class="search-row">
+              <input type="text" class="search-input" id="searchInput" placeholder="Search media by filename..."
+                oninput="filterFiles()">
+            </div>
+            <div class="filter-pills">
+              <div class="pill active" onclick="setMediaTypeFilter('all', this)">All</div>
+              <div class="pill" onclick="setMediaTypeFilter('video', this)">Videos</div>
+              <div class="pill" onclick="setMediaTypeFilter('audio', this)">Audios</div>
+              <div class="pill" onclick="setMediaTypeFilter('image', this)">Images</div>
+            </div>
+
+            <!-- Single Unified Toolbar -->
+            <div class="files-toolbar">
+              <label class="toolbar-left" onclick="event.preventDefault(); toggleSelectAll();">
+                <input type="checkbox" id="masterSelectAllCheck">
+                <span id="selectedSummary" style="font-weight: 600;">0 selected</span>
+              </label>
+              <span style="font-size: 11.5px; color: var(--text-muted);">Click items to select</span>
+            </div>
+
+            <!-- Media List -->
+            <div class="files-list" id="filesList">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+        </section>
+
+        <!-- Right: Action Center & Live Progress -->
+        <section>
+          <!-- Live Progress Card -->
+          <div class="progress-card" id="progressCard" style="display: none;">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);">
+              <div
+                style="font-weight: 700; font-size: 13.5px; color: var(--lavender); display: flex; align-items: center; gap: 8px;"
+                id="progressStatusText">
+                <i data-lucide="loader-2" class="spin-icon"></i> Batch Processing...
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <button class="btn btn-danger btn-sm" id="cancelBtn" onclick="cancelJob()"
+                  title="Cancel all tasks and rollback created output files">
+                  <i data-lucide="square"></i> Cancel All
+                </button>
+                <button class="btn btn-secondary btn-sm" id="dismissBtn" style="display: none;"
+                  onclick="dismissProgress()">
+                  <i data-lucide="check"></i> Dismiss
+                </button>
+              </div>
+            </div>
+
+            <!-- 1. Text-only File Status Queue List -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <span
+                style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">Task
+                Queue</span>
+              <span style="font-size: 10.5px; color: var(--text-muted);">Click file to view FFmpeg log</span>
+            </div>
+            <div class="task-queue-list" id="taskQueueList">
+              <!-- Populated by JS -->
+            </div>
+
+            <!-- 2. Active Batch Workers Progress Bars -->
+            <div
+              style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 12px 0 6px 0;">
+              Active Tasks Progress
+            </div>
+            <div class="active-workers-list" id="activeWorkersList">
+              <!-- Populated dynamically by JS -->
+            </div>
+
+            <div class="progress-meta"
+              style="margin-top: 10px; border-top: 1px solid var(--border-subtle); padding-top: 8px;">
+              <span id="progressCountText">0/0 completed</span>
+              <span id="progressWorkersBadge" class="badge badge-file">2 Workers</span>
+            </div>
+          </div>
+
+          <!-- Configuration Card -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <i data-lucide="sliders" style="color: var(--teal);"></i>
+                <span>Task Configuration</span>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="form-group">
+                <label class="form-label">Select FFmpeg Preset</label>
+                <select class="form-select" id="presetSelect" onchange="onPresetChange()">
+                  <!-- Populated by JS -->
+                </select>
+                <div class="cmd-preview-box" id="cmdPreviewBox">-c:v libx264 -crf 23 -c:a aac</div>
+              </div>
+
+              <!-- Parallel Workers Selector -->
+              <div class="form-group">
+                <label class="form-label" style="display: flex; justify-content: space-between; align-items: center;">
+                  <span>Parallel Workers</span>
+                  <span style="font-size: 11px; color: var(--text-muted);">Batch Concurrency (1-4)</span>
+                </label>
+                <select class="form-select" id="concurrencySelect">
+                  <option value="1">1 Worker (Sequential)</option>
+                  <option value="2" selected>2 Workers (Parallel)</option>
+                  <option value="3">3 Workers (Parallel)</option>
+                  <option value="4">4 Workers (Max Parallel)</option>
+                </select>
+              </div>
+
+              <!-- Custom command options -->
+              <div class="form-group">
+                <label class="checkbox-label" style="margin-bottom: 8px;">
+                  <input type="checkbox" id="customCmdToggle" onchange="toggleCustomCmd()">
+                  <span>Customize Arguments Manually</span>
+                </label>
+                <div id="customCmdFields" style="display: none;">
+                  <input type="text" class="form-input" id="customCmdInput"
+                    placeholder="e.g. -c:v libx264 -crf 24 -c:a aac -b:a 128k">
+                  <div style="margin-top: 8px;">
+                    <input type="text" class="form-input" id="customExtInput" placeholder="Output Extension (.mp4)"
+                      style="width: 160px;">
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="deleteAfterCheck">
+                  <span>Delete original media after successful conversion</span>
+                </label>
+              </div>
+
+              <button class="btn btn-primary" id="startBtn" style="width: 100%; padding: 13px; font-size: 14px;"
+                onclick="startProcessing()">
+                <i data-lucide="zap"></i> Start Batch Processing
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- TAB 2: Dedicated Presets Manager -->
+    <div class="tab-content" id="tab-presets">
+      <div class="content-topbar" style="margin: -16px -20px 14px -20px;">
+        <div class="tab-title-box">
+          <div class="tab-title">FFmpeg Presets Manager</div>
+          <span class="badge badge-video" id="presetCountBadge">0 presets</span>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="openPresetModal(null)">
+          <i data-lucide="plus"></i> New Preset
+        </button>
+      </div>
+
+      <div style="margin-bottom: 14px;">
+        <input type="text" class="search-input" id="presetSearchInput"
+          placeholder="Filter presets by name or command..." oninput="filterPresets()" style="max-width: 420px;">
+      </div>
+
+      <!-- Presets Grid -->
+      <div class="presets-grid" id="presetsGrid">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+
+
+  </div>
+
+  <!-- Pure Borderless Media Preview Lightbox (No wrapper div, fixed corner X) -->
+  <div class="preview-overlay" id="previewModal" onclick="onPreviewOverlayClick(event)">
+    <button class="preview-close-btn" onclick="closePreviewModal()" title="Close preview (Esc)">
+      <i data-lucide="x"></i>
+    </button>
+    <div id="previewContainer"
+      style="display: flex; justify-content: center; align-items: center; width: 100%; height: 100%; padding: 24px;">
+      <!-- Injected dynamically -->
+    </div>
+  </div>
+
+  <!-- Preset Add/Edit Modal -->
+  <div class="modal-overlay" id="presetModal">
+    <div class="modal-box" style="max-width: 540px;">
+      <div class="modal-header">
+        <div style="font-weight: 700; font-size: 16px; color: var(--lavender);" id="presetModalTitle">Add New Preset
+        </div>
+        <button class="modal-close" onclick="closePresetModal()">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 14px;">
+        <input type="hidden" id="editOriginalName">
+        <div>
+          <label class="form-label">Preset Name</label>
+          <input type="text" class="form-input" id="modalPresetName" placeholder="e.g. 1080p Web Compression">
+        </div>
+        <div>
+          <label class="form-label">FFmpeg Arguments (after -i)</label>
+          <input type="text" class="form-input" id="modalPresetCmd" placeholder="e.g. -c:v libx264 -crf 23 -c:a aac">
+        </div>
+        <div>
+          <label class="form-label">Output Extension</label>
+          <input type="text" class="form-input" id="modalPresetExt" placeholder=".mp4" style="width: 140px;">
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+          <button class="btn btn-secondary" onclick="closePresetModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="saveModalPreset()">Save Preset</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FFmpeg Process Log Modal -->
+  <div class="modal-overlay" id="logModal" onclick="if(event.target===this) closeLogModal()">
+    <div class="modal-box" style="max-width: 760px; width: 92vw;">
+      <div class="modal-header">
+        <div
+          style="font-weight: 700; font-size: 15px; color: var(--lavender); display: flex; align-items: center; gap: 8px;">
+          <i data-lucide="terminal" style="color: var(--teal);"></i>
+          <span id="logModalTitle">FFmpeg Output Log</span>
+        </div>
+        <button class="modal-close" onclick="closeLogModal()">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px;">
+        <div
+          style="font-size: 11.5px; color: var(--text-sub); word-break: break-all; background: var(--bg-card); padding: 8px 10px; border-radius: 4px; font-family: 'JetBrains Mono', monospace;"
+          id="logModalCmd"></div>
+        <pre id="logModalContent"
+          style="background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.5; color: var(--text-main); max-height: 400px; overflow: auto; white-space: pre-wrap; word-break: break-all; user-select: text;"></pre>
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+          <button class="btn btn-secondary btn-sm" id="copyLogBtn" onclick="copyLogContent()">
+            <i data-lucide="copy"></i> Copy Log
+          </button>
+          <button class="btn btn-primary btn-sm" onclick="closeLogModal()">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+
+</html>

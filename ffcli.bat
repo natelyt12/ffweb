@@ -1,2 +1,2 @@
 @echo off
-python "%~dp0ffmgr.py" %*
+call "%~dp0ffweb.bat" %*

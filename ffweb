@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# ffweb - Portable launcher for Linux, macOS & Android (Termux)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if command -v python3 >/dev/null 2>&1; then
+    exec python3 "$SCRIPT_DIR/ffweb.py" "$@"
+elif command -v python >/dev/null 2>&1; then
+    exec python "$SCRIPT_DIR/ffweb.py" "$@"
+else
+    echo "[ffweb] Error: Python 3 is not installed or not in PATH."
+    exit 1
+fi

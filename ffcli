@@ -1,2 +1,4 @@
 #!/usr/bin/env bash
-python3 "$(dirname "$0")/ffmgr.py" "$@"
+# ffcli -> redirects to ffweb for backward compatibility
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$SCRIPT_DIR/ffweb" "$@"
