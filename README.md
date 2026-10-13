@@ -9,6 +9,8 @@ Runs seamlessly on **Windows**, **Linux**, **macOS**, and **Android (Termux)**.
 ## 💡 What You Can Do with ffweb
 
 - **Batch convert media in seconds**: Select multiple videos, audios, or images from your folder, pick an optimized preset, and convert them in one go. Run conversions sequentially or with up to **4 parallel workers** to speed things up.
+- **Dedicated Video Cutter**: Live video preview with real-time frame scrubbing, dual-handle range selection, timecode inputs (`hh:mm:ss.ms`), keyframe / stream copy lossless fast-export, frame-accurate re-encoding, and audio waveform displayed directly beneath the timeline.
+- **Dedicated Audio Cutter & Waveform Studio**: High-resolution interactive audio waveform canvas with zoom levels (1x-8x), draggable In/Out boundary handles, draggable cut region window, audio playback, Fade In / Fade Out effects, and multi-format export (MP3, WAV, AAC, FLAC, M4A, Stream Copy).
 - **Preview media right in your browser**: Watch videos, listen to music tracks, or check images with smooth seeking before converting—no external players needed.
 - **Rename or delete files on the spot**: Rename files or clean up unwanted originals directly from the web interface without switching back and forth to File Explorer.
 - **Watch real-time speed & inspect full logs**: Monitor live progress percentage, encoding speed multiplier (e.g. `2.8x`), and FPS. Click any task to inspect the exact FFmpeg command and live terminal logs, with a one-click `Copied!` button.
@@ -40,8 +42,6 @@ Or pass a media folder path directly:
 ```cmd
 ffweb "D:\Videos\Movies"
 ```
-
-*(Note: `ffcli` also works and automatically redirects to `ffweb`)*.
 
 ---
 
@@ -103,7 +103,8 @@ source ~/.bashrc
 | :--- | :--- | :---: | :--- |
 | **Universal Video** | `-c:v libx264 -crf 18 -preset slow -pix_fmt yuv420p -profile:v high -level 4.1 -movflags +faststart -c:a aac -b:a 256k` | `.mp4` | 100% playback compatibility across all devices, TVs, and web browsers with visually lossless quality. |
 | **Max Compression** | `-c:v libx265 -crf 24 -preset medium -tag:v hvc1 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 128k` | `.mp4` | H.265 HEVC compression saving 50% to 75% file size while preserving high visual fidelity. |
-| **Extract MP3 Audio** | `-vn -c:a libmp3lame -q:a 2` | `.mp3` | High quality VBR MP3 extraction from media files containing an audio stream. |
+| **Extract MP3 (320kbps Best Quality)** | `-vn -c:a libmp3lame -b:a 320k` | `.mp3` | Highest quality 320kbps CBR MP3 extraction from video/audio files. |
+| **Extract MP3 (VBR High Quality)** | `-vn -c:a libmp3lame -q:a 2` | `.mp3` | High quality variable bitrate (~190-250kbps) MP3 with optimal file size. |
 
 You can add your own custom presets anytime in the **Presets Manager** tab.
 
@@ -116,16 +117,27 @@ ffweb/
 ├── ffweb.py               # Main Python server (pure standard library)
 ├── ffmpeg_commands.json   # Presets database
 ├── ffweb.bat              # Windows batch launcher
-├── ffcli.bat              # Windows backward compatibility wrapper
 ├── ffweb                  # Linux / macOS / Termux bash launcher
-├── ffcli                  # Linux / Termux backward compatibility wrapper
 ├── .gitignore             # Standard repository ignore rules
 ├── .gitattributes         # Enforce LF endings on shell scripts
 ├── README.md              # Documentation
 └── web/
     ├── index.html         # Frontend HTML structure
     ├── style.css          # Styling & dark pastel theme
-    └── app.js             # Client logic, live polling & preview
+    └── js/                # ES modules (loaded natively, no build step)
+        ├── main.js        # Bootstrap: global handler binding, listeners, init
+        ├── core/
+        │   └── utils.js   # Shared helpers (icons, escaping, timecodes)
+        └── features/
+            ├── explorer.js   # Media explorer, selection & folder switching
+            ├── presets.js    # Preset library & editor modal
+            ├── batch.js      # Batch conversion, live progress & log modal
+            ├── preview.js    # Media preview lightbox
+            ├── tabs.js       # Tab navigation & cutter file pickers
+            └── cutters/
+                ├── video.js  # Video cutter controller
+                ├── audio.js  # Audio cutter / waveform studio
+                └── trim.js   # Trim execution & status polling
 ```
 
 ---

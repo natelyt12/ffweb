@@ -29,6 +29,14 @@
         <i data-lucide="film"></i>
         <span>Media & Convert</span>
       </button>
+      <button class="nav-tab-btn" onclick="switchTab('video-cutter')" id="navBtn-video-cutter">
+        <i data-lucide="scissors"></i>
+        <span>Cut Video</span>
+      </button>
+      <button class="nav-tab-btn" onclick="switchTab('audio-cutter')" id="navBtn-audio-cutter">
+        <i data-lucide="music"></i>
+        <span>Cut Audio</span>
+      </button>
       <button class="nav-tab-btn" onclick="switchTab('presets')" id="navBtn-presets">
         <i data-lucide="sliders"></i>
         <span>Presets Manager</span>
@@ -193,14 +201,29 @@
                 <select class="form-select" id="presetSelect" onchange="onPresetChange()">
                   <!-- Populated by JS -->
                 </select>
-                <div class="cmd-preview-box" id="cmdPreviewBox">-c:v libx264 -crf 23 -c:a aac</div>
+                <div class="cmd-preview-box" id="cmdPreviewBox" style="display: none;"></div>
+
+                <!-- Custom command draft fields shown when "Custom Arguments" is selected -->
+                <div id="customCmdFields" style="margin-top: 10px;">
+                  <label class="form-label" style="font-size: 11.5px; margin-bottom: 5px; color: var(--lavender); display: flex; justify-content: space-between;">
+                    <span>Custom FFmpeg Arguments</span>
+                    <span style="font-size: 10.5px; color: var(--text-muted);">Draft only (not saved)</span>
+                  </label>
+                  <input type="text" class="form-input" id="customCmdInput"
+                    placeholder="e.g. -c:v libx264 -crf 23 -c:a aac -b:a 192k" oninput="onCustomCmdInput()">
+                  <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
+                    <span style="font-size: 11.5px; color: var(--text-muted); white-space: nowrap;">Output Extension:</span>
+                    <input type="text" class="form-input" id="customExtInput" placeholder=".mp4" value=".mp4"
+                      style="width: 100px;">
+                  </div>
+                </div>
               </div>
 
               <!-- Parallel Workers Selector -->
-              <div class="form-group">
+              <div class="form-group" id="concurrencyGroup">
                 <label class="form-label" style="display: flex; justify-content: space-between; align-items: center;">
                   <span>Parallel Workers</span>
-                  <span style="font-size: 11px; color: var(--text-muted);">Batch Concurrency (1-4)</span>
+                  <span style="font-size: 11px; color: var(--text-muted);" id="concurrencyHint">Batch Concurrency (1-4)</span>
                 </label>
                 <select class="form-select" id="concurrencySelect">
                   <option value="1">1 Worker (Sequential)</option>
@@ -208,22 +231,6 @@
                   <option value="3">3 Workers (Parallel)</option>
                   <option value="4">4 Workers (Max Parallel)</option>
                 </select>
-              </div>
-
-              <!-- Custom command options -->
-              <div class="form-group">
-                <label class="checkbox-label" style="margin-bottom: 8px;">
-                  <input type="checkbox" id="customCmdToggle" onchange="toggleCustomCmd()">
-                  <span>Customize Arguments Manually</span>
-                </label>
-                <div id="customCmdFields" style="display: none;">
-                  <input type="text" class="form-input" id="customCmdInput"
-                    placeholder="e.g. -c:v libx264 -crf 24 -c:a aac -b:a 128k">
-                  <div style="margin-top: 8px;">
-                    <input type="text" class="form-input" id="customExtInput" placeholder="Output Extension (.mp4)"
-                      style="width: 160px;">
-                  </div>
-                </div>
               </div>
 
               <div class="form-group">
@@ -243,7 +250,498 @@
       </div>
     </div>
 
-    <!-- TAB 2: Dedicated Presets Manager -->
+    <!-- TAB 2: Video Cutter -->
+    <div class="tab-content" id="tab-video-cutter">
+      <div class="content-topbar" style="margin: -16px -20px 14px -20px;">
+        <div class="tab-title-box">
+          <div class="tab-title">Video Cutter</div>
+          <span class="badge badge-video" id="videoCutterBadge">0 videos</span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <div class="filter-pills" style="margin: 0;">
+            <div class="pill active" title="Video cutter mode is active">🎬 Cut Video</div>
+            <div class="pill" onclick="switchTab('audio-cutter')" title="Switch to the audio cutter">🎵 Cut Audio</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- File selector bar -->
+      <div class="card cutter-top-bar" style="padding: 12px 16px; margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+          <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 260px;">
+            <label style="font-size: 12px; font-weight: 700; color: var(--lavender); white-space: nowrap; display: flex; align-items: center; gap: 6px;">
+              <i data-lucide="video" style="width: 14px; height: 14px;"></i>
+              <span>Video File:</span>
+            </label>
+            <select class="form-select" id="videoCutterSelect" onchange="onSelectVideoCutterFile()" style="flex: 1;">
+              <option value="">-- Select a video from the working directory --</option>
+            </select>
+            <button class="btn btn-secondary btn-sm" onclick="populateCutterFileLists()" title="Reload the file list">
+              <i data-lucide="refresh-cw"></i>
+            </button>
+          </div>
+          <div class="cutter-meta-tags" id="videoCutterMeta"></div>
+        </div>
+      </div>
+
+      <!-- Video Trimmer Main Workspace -->
+      <div class="cutter-grid">
+        <!-- Left/Center: Video Player & Timeline -->
+        <div class="card cutter-stage">
+          <!-- Video Screen Container -->
+          <div class="video-screen-container">
+            <video id="videoCutterEl" playsinline preload="auto"></video>
+            <!-- Big play/pause click overlay -->
+            <div class="video-overlay-play" id="videoOverlayPlayBtn" onclick="toggleVideoPlayback()">
+              <i data-lucide="play"></i>
+            </div>
+            <!-- Timecode overlay badge -->
+            <div class="video-timecode-badge" id="videoTimecodeBadge">00:00:00.000 / 00:00:00.000</div>
+          </div>
+
+          <!-- Transport Control Bar -->
+          <div class="cutter-transport">
+            <div class="transport-left">
+              <button class="btn btn-secondary btn-sm" onclick="stepVideo(-5)" title="Back 5 seconds">
+                <i data-lucide="chevrons-left"></i> -5s
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="stepVideo(-1)" title="Back 1 second">
+                -1s
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="stepVideo(-1/30)" title="Back 1 frame">
+                -1f
+              </button>
+              <button class="btn btn-primary btn-sm play-main-btn" id="videoPlayPauseBtn" onclick="toggleVideoPlayback()" title="Play / Pause (Space)">
+                <i data-lucide="play" id="videoPlayIcon"></i>
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="stepVideo(1/30)" title="Forward 1 frame">
+                +1f
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="stepVideo(1)" title="Forward 1 second">
+                +1s
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="stepVideo(5)" title="Forward 5 seconds">
+                +5s <i data-lucide="chevrons-right"></i>
+              </button>
+            </div>
+
+            <div class="transport-center">
+              <button class="btn btn-secondary btn-sm" id="btnVideoPlayRange" onclick="playVideoRange()" title="Play the cut range only">
+                <i data-lucide="play-circle"></i> Cut Range
+              </button>
+              <button class="btn btn-secondary btn-sm" id="btnVideoLoop" onclick="toggleVideoLoop()" title="Loop the cut range">
+                <i data-lucide="repeat"></i> Loop
+              </button>
+            </div>
+
+            <div class="transport-right">
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <button class="btn btn-secondary btn-sm" onclick="toggleVideoMute()" id="videoMuteBtn" title="Mute / Unmute">
+                  <i data-lucide="volume-2" id="videoMuteIcon"></i>
+                </button>
+                <input type="range" min="0" max="1" step="0.05" value="1" class="volume-slider" id="videoVolumeSlider" oninput="setVideoVolume(this.value)">
+              </div>
+              <select class="form-select form-select-sm" id="videoSpeedSelect" onchange="setVideoSpeed(this.value)" style="width: 78px; padding: 4px 8px; font-size: 11px;">
+                <option value="0.5">0.5x</option>
+                <option value="1" selected>1.0x</option>
+                <option value="1.25">1.25x</option>
+                <option value="1.5">1.5x</option>
+                <option value="2">2.0x</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Video Timeline & Mini Waveform Track -->
+          <div class="timeline-wrapper">
+            <!-- Timeline Ruler -->
+            <div class="timeline-ruler" id="videoTimelineRuler"></div>
+
+            <!-- Scrubber Track & Waveform Canvas -->
+            <div class="timeline-track" id="videoTimelineTrack">
+              <canvas class="timeline-waveform-canvas" id="videoWaveformCanvas"></canvas>
+              <div class="timeline-cut-region" id="videoCutRegion"></div>
+              <div class="timeline-handle handle-in" id="videoHandleIn">
+                <div class="handle-flag">IN</div>
+                <div class="handle-line"></div>
+              </div>
+              <div class="timeline-handle handle-out" id="videoHandleOut">
+                <div class="handle-flag">OUT</div>
+                <div class="handle-line"></div>
+              </div>
+              <div class="timeline-playhead" id="videoPlayhead">
+                <div class="playhead-head"></div>
+                <div class="playhead-line"></div>
+              </div>
+              <div class="timeline-tooltip" id="videoTimelineTooltip">00:00:00.000</div>
+            </div>
+
+            <!-- In/Out Range Controls & Time Inputs -->
+            <div class="timeline-controls-row">
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <button class="btn btn-secondary btn-sm" onclick="setVideoInPoint()" title="Set the in point at the playhead (I key)">
+                  <i data-lucide="corner-down-right"></i> [ Set In (I)
+                </button>
+                <div class="time-input-group">
+                  <span class="time-label">Start:</span>
+                  <input type="text" class="form-input time-code-input" id="videoInputStart" value="00:00:00.000" onchange="onVideoTimeInputChange('start')">
+                </div>
+              </div>
+
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <div class="duration-badge-box">
+                  <span style="font-size: 11px; color: var(--text-muted);">Duration:</span>
+                  <span class="badge badge-video" id="videoTrimDurationBadge" style="font-family: 'JetBrains Mono', monospace; font-size: 12px;">00:00:00.000</span>
+                </div>
+                <button class="btn btn-secondary btn-sm" onclick="resetVideoRange()" title="Reset to the full video range">
+                  <i data-lucide="rotate-ccw"></i> Reset
+                </button>
+              </div>
+
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <div class="time-input-group">
+                  <span class="time-label">End:</span>
+                  <input type="text" class="form-input time-code-input" id="videoInputEnd" value="00:00:00.000" onchange="onVideoTimeInputChange('end')">
+                </div>
+                <button class="btn btn-secondary btn-sm" onclick="setVideoOutPoint()" title="Set the out point at the playhead (O key)">
+                  Set Out (O) ] <i data-lucide="corner-down-left"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Video Export Settings Card -->
+        <div class="card cutter-sidebar">
+          <div class="card-header">
+            <div class="card-title">
+              <i data-lucide="settings" style="color: var(--lavender);"></i>
+              <span>Export Trimmed Video</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="form-group">
+              <label class="form-label">Output File Name</label>
+              <input type="text" class="form-input" id="videoOutputName" placeholder="clip_trimmed.mp4">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Cut Mode</label>
+              <select class="form-select" id="videoCutMode" onchange="onVideoCutModeChange()">
+                <option value="copy" selected>⚡ Ultra Fast (Stream Copy - Keeps 100% of the original)</option>
+                <option value="encode">🎯 Frame Accurate (Re-encode MP4)</option>
+                <option value="audio_only">🎵 Extract Audio (MP3 320k)</option>
+              </select>
+              <div class="cutter-mode-hint" id="videoCutModeHint">
+                Stream copy exports in about a second without re-encoding. Keeps 100% of the original video & audio quality.
+              </div>
+            </div>
+
+            <div class="tip-card" style="margin-bottom: 16px;">
+              <div style="font-weight: 700; font-size: 12px; color: var(--lavender); margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+                <i data-lucide="sparkles" style="width: 13px; height: 13px;"></i> Keyboard Shortcuts
+              </div>
+              <div style="font-size: 11px; color: var(--text-sub); line-height: 1.6;">
+                • <b>Space</b>: Play / Pause<br>
+                • <b>I / O</b>: Set the In / Out points<br>
+                • <b>Left/Right Arrows</b>: Step back/forward 1 second (Shift: 5s)<br>
+                • Drag the timeline to scrub the video preview live.
+              </div>
+            </div>
+
+            <!-- Export Progress Bar -->
+            <div class="trim-progress-box" id="videoTrimProgressBox" style="display: none;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <span style="font-size: 12px; font-weight: 700; color: var(--lavender); display: flex; align-items: center; gap: 6px;">
+                  <i data-lucide="loader-2" class="spin-icon"></i> <span id="videoTrimProgressText">Trimming video...</span>
+                </span>
+                <span id="videoTrimPct" style="font-size: 12px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: var(--teal);">0%</span>
+              </div>
+              <div class="progress-bar-wrap" style="height: 7px;">
+                <div class="progress-bar-fill" id="videoTrimProgressBar" style="width: 0%;"></div>
+              </div>
+              <div style="display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--text-muted);">
+                <span id="videoTrimSpeed">Speed: --</span>
+                <button class="btn btn-danger btn-sm" style="padding: 2px 8px; font-size: 11px;" onclick="cancelTrim()">Cancel</button>
+              </div>
+            </div>
+
+            <!-- Export Success Banner -->
+            <div class="trim-result-box" id="videoTrimResultBox" style="display: none;">
+              <div style="display: flex; align-items: center; gap: 8px; color: var(--mint); font-weight: 700; font-size: 13px; margin-bottom: 8px;">
+                <i data-lucide="check-circle-2"></i> Video trimmed successfully!
+              </div>
+              <div id="videoTrimResultName" style="font-size: 11.5px; color: var(--text-sub); word-break: break-all; margin-bottom: 12px; font-family: 'JetBrains Mono', monospace;"></div>
+              <div style="display: flex; gap: 8px;">
+                <button class="btn btn-primary btn-sm" id="btnPreviewTrimmedVideo" onclick="previewTrimmedResult('video')">
+                  <i data-lucide="play"></i> Preview Result
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="openFolder()">
+                  <i data-lucide="folder"></i> Open Folder
+                </button>
+              </div>
+            </div>
+
+            <button class="btn btn-primary" id="btnStartVideoTrim" style="width: 100%; padding: 13px; font-size: 14px; margin-top: 10px;" onclick="startTrim('video')">
+              <i data-lucide="scissors"></i> Trim & Save Video
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: Audio Cutter (Waveform Studio) -->
+    <div class="tab-content" id="tab-audio-cutter">
+      <div class="content-topbar" style="margin: -16px -20px 14px -20px;">
+        <div class="tab-title-box">
+          <div class="tab-title">Audio Cutter</div>
+          <span class="badge badge-audio" id="audioCutterBadge">0 audio</span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <div class="filter-pills" style="margin: 0;">
+            <div class="pill" onclick="switchTab('video-cutter')" title="Switch to the video cutter">🎬 Cut Video</div>
+            <div class="pill active" title="Audio cutter mode is active">🎵 Cut Audio</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- File selector bar -->
+      <div class="card cutter-top-bar" style="padding: 12px 16px; margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+          <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 260px;">
+            <label style="font-size: 12px; font-weight: 700; color: var(--teal); white-space: nowrap; display: flex; align-items: center; gap: 6px;">
+              <i data-lucide="music" style="width: 14px; height: 14px;"></i>
+              <span>Audio File:</span>
+            </label>
+            <select class="form-select" id="audioCutterSelect" onchange="onSelectAudioCutterFile()" style="flex: 1;">
+              <option value="">-- Select a song or video --</option>
+            </select>
+            <button class="btn btn-secondary btn-sm" onclick="populateCutterFileLists()" title="Reload the file list">
+              <i data-lucide="refresh-cw"></i>
+            </button>
+          </div>
+          <div class="cutter-meta-tags" id="audioCutterMeta"></div>
+        </div>
+      </div>
+
+      <!-- Audio Trimmer Main Workspace -->
+      <div class="cutter-grid">
+        <!-- Left/Center: Grand Waveform Studio & Transport -->
+        <div class="card cutter-stage">
+          <!-- Audio Element (Hidden) -->
+          <audio id="audioCutterEl" playsinline preload="auto"></audio>
+
+          <!-- Grand Waveform Studio Box -->
+          <div class="waveform-studio-box">
+            <!-- Studio Toolbar (Zoom, Timecode) -->
+            <div class="waveform-toolbar">
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Zoom:</span>
+                <div class="zoom-pill-group">
+                  <button class="zoom-btn active" id="zoomBtn-1" onclick="setAudioZoom(1)">1x</button>
+                  <button class="zoom-btn" id="zoomBtn-2" onclick="setAudioZoom(2)">2x</button>
+                  <button class="zoom-btn" id="zoomBtn-4" onclick="setAudioZoom(4)">4x</button>
+                  <button class="zoom-btn" id="zoomBtn-8" onclick="setAudioZoom(8)">8x</button>
+                </div>
+              </div>
+              <div class="waveform-timecode" id="audioTimecodeBadge">00:00:00.000 / 00:00:00.000</div>
+            </div>
+
+            <!-- Waveform Viewport with Scroll for Zoom -->
+            <div class="waveform-viewport" id="audioWaveformViewport">
+              <div class="waveform-ruler" id="audioWaveformRuler"></div>
+              <div class="waveform-canvas-wrap" id="audioCanvasWrap">
+                <canvas class="grand-waveform-canvas" id="audioWaveformCanvas" height="190"></canvas>
+                <!-- Shaded cut region -->
+                <div class="waveform-cut-region" id="audioCutRegion">
+                  <div class="fade-ramp fade-in-ramp" id="audioFadeInRamp"></div>
+                  <div class="fade-ramp fade-out-ramp" id="audioFadeOutRamp"></div>
+                </div>
+                <!-- In Handle -->
+                <div class="waveform-handle handle-in" id="audioHandleIn">
+                  <div class="handle-flag">IN</div>
+                  <div class="handle-line"></div>
+                </div>
+                <!-- Out Handle -->
+                <div class="waveform-handle handle-out" id="audioHandleOut">
+                  <div class="handle-flag">OUT</div>
+                  <div class="handle-line"></div>
+                </div>
+                <!-- Playhead needle -->
+                <div class="waveform-playhead" id="audioPlayhead">
+                  <div class="playhead-head"></div>
+                  <div class="playhead-line"></div>
+                </div>
+                <!-- Hover tooltip -->
+                <div class="timeline-tooltip" id="audioTimelineTooltip">00:00:00.000</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Transport Control Bar -->
+          <div class="cutter-transport">
+            <div class="transport-left">
+              <button class="btn btn-secondary btn-sm" onclick="stepAudio(-5)" title="Back 5 seconds">
+                <i data-lucide="chevrons-left"></i> -5s
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="stepAudio(-0.1)" title="Back 0.1 second">
+                -0.1s
+              </button>
+              <button class="btn btn-primary btn-sm play-main-btn" id="audioPlayPauseBtn" onclick="toggleAudioPlayback()" title="Play / Pause (Space)">
+                <i data-lucide="play" id="audioPlayIcon"></i>
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="stepAudio(0.1)" title="Forward 0.1 second">
+                +0.1s
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="stepAudio(5)" title="Forward 5 seconds">
+                +5s <i data-lucide="chevrons-right"></i>
+              </button>
+            </div>
+
+            <div class="transport-center">
+              <button class="btn btn-secondary btn-sm" id="btnAudioPlayRange" onclick="playAudioRange()" title="Play the cut range only">
+                <i data-lucide="play-circle"></i> Cut Range
+              </button>
+              <button class="btn btn-secondary btn-sm" id="btnAudioLoop" onclick="toggleAudioLoop()" title="Loop the cut range">
+                <i data-lucide="repeat"></i> Loop
+              </button>
+            </div>
+
+            <div class="transport-right">
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <button class="btn btn-secondary btn-sm" onclick="toggleAudioMute()" id="audioMuteBtn" title="Mute / Unmute">
+                  <i data-lucide="volume-2" id="audioMuteIcon"></i>
+                </button>
+                <input type="range" min="0" max="1" step="0.05" value="1" class="volume-slider" id="audioVolumeSlider" oninput="setAudioVolume(this.value)">
+              </div>
+            </div>
+          </div>
+
+          <!-- In/Out Controls & Timecode Row -->
+          <div class="timeline-controls-row" style="margin-top: 10px;">
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+              <button class="btn btn-secondary btn-sm" onclick="setAudioInPoint()" title="Set the in point at the playhead (I key)">
+                <i data-lucide="corner-down-right"></i> [ Set In (I)
+              </button>
+              <div class="time-input-group">
+                <span class="time-label">Start:</span>
+                <input type="text" class="form-input time-code-input" id="audioInputStart" value="00:00:00.000" onchange="onAudioTimeInputChange('start')">
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+              <div class="duration-badge-box">
+                <span style="font-size: 11px; color: var(--text-muted);">Duration:</span>
+                <span class="badge badge-audio" id="audioTrimDurationBadge" style="font-family: 'JetBrains Mono', monospace; font-size: 12px;">00:00:00.000</span>
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="resetAudioRange()" title="Reset to the full track">
+                <i data-lucide="rotate-ccw"></i> Reset
+              </button>
+            </div>
+
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+              <div class="time-input-group">
+                <span class="time-label">End:</span>
+                <input type="text" class="form-input time-code-input" id="audioInputEnd" value="00:00:00.000" onchange="onAudioTimeInputChange('end')">
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="setAudioOutPoint()" title="Set the out point at the playhead (O key)">
+                Set Out (O) ] <i data-lucide="corner-down-left"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Audio Export & Effects Settings Card -->
+        <div class="card cutter-sidebar">
+          <div class="card-header">
+            <div class="card-title">
+              <i data-lucide="sliders" style="color: var(--teal);"></i>
+              <span>Effects & Audio Export</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <!-- Fade Effects -->
+            <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 12px; margin-bottom: 14px;">
+              <div style="font-size: 11.5px; font-weight: 700; color: var(--teal); margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+                <i data-lucide="activity" style="width: 13px; height: 13px;"></i> Fade Effects
+              </div>
+              <div class="form-group" style="margin-bottom: 8px;">
+                <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;">
+                  <span style="color: var(--text-sub);">Fade In:</span>
+                  <span id="audioFadeInVal" style="color: var(--teal); font-family: 'JetBrains Mono', monospace;">0.0s</span>
+                </div>
+                <input type="range" min="0" max="5" step="0.5" value="0" class="form-range" id="audioFadeInInput" oninput="onAudioFadeChange()">
+              </div>
+              <div class="form-group" style="margin-bottom: 0;">
+                <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;">
+                  <span style="color: var(--text-sub);">Fade Out:</span>
+                  <span id="audioFadeOutVal" style="color: var(--teal); font-family: 'JetBrains Mono', monospace;">0.0s</span>
+                </div>
+                <input type="range" min="0" max="5" step="0.5" value="0" class="form-range" id="audioFadeOutInput" oninput="onAudioFadeChange()">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Output Format</label>
+              <select class="form-select" id="audioFormatSelect" onchange="onAudioFormatChange()">
+                <option value="copy" selected>⚡ Keep Original (Stream Copy - Ultra fast)</option>
+                <option value="mp3">MP3 (320kbps - Most compatible)</option>
+                <option value="aac">AAC (256kbps)</option>
+                <option value="wav">WAV (Lossless PCM 16-bit 44.1kHz)</option>
+                <option value="flac">FLAC (Lossless Studio)</option>
+                <option value="m4a">M4A (Apple Audio)</option>
+              </select>
+              <div class="cutter-mode-hint" id="audioFormatHint">
+                Stream copy exports instantly, keeping the original format and quality.
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Output File Name</label>
+              <input type="text" class="form-input" id="audioOutputName" placeholder="track_trimmed.mp3">
+            </div>
+
+            <!-- Export Progress Bar -->
+            <div class="trim-progress-box" id="audioTrimProgressBox" style="display: none;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <span style="font-size: 12px; font-weight: 700; color: var(--teal); display: flex; align-items: center; gap: 6px;">
+                  <i data-lucide="loader-2" class="spin-icon"></i> <span id="audioTrimProgressText">Trimming audio...</span>
+                </span>
+                <span id="audioTrimPct" style="font-size: 12px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: var(--teal);">0%</span>
+              </div>
+              <div class="progress-bar-wrap" style="height: 7px;">
+                <div class="progress-bar-fill" id="audioTrimProgressBar" style="width: 0%;"></div>
+              </div>
+              <div style="display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--text-muted);">
+                <span id="audioTrimSpeed">Speed: --</span>
+                <button class="btn btn-danger btn-sm" style="padding: 2px 8px; font-size: 11px;" onclick="cancelTrim()">Cancel</button>
+              </div>
+            </div>
+
+            <!-- Export Success Banner -->
+            <div class="trim-result-box" id="audioTrimResultBox" style="display: none;">
+              <div style="display: flex; align-items: center; gap: 8px; color: var(--mint); font-weight: 700; font-size: 13px; margin-bottom: 8px;">
+                <i data-lucide="check-circle-2"></i> Audio trimmed successfully!
+              </div>
+              <div id="audioTrimResultName" style="font-size: 11.5px; color: var(--text-sub); word-break: break-all; margin-bottom: 12px; font-family: 'JetBrains Mono', monospace;"></div>
+              <div style="display: flex; gap: 8px;">
+                <button class="btn btn-primary btn-sm" id="btnPreviewTrimmedAudio" onclick="previewTrimmedResult('audio')">
+                  <i data-lucide="play"></i> Listen
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="openFolder()">
+                  <i data-lucide="folder"></i> Open Folder
+                </button>
+              </div>
+            </div>
+
+            <button class="btn btn-primary" id="btnStartAudioTrim" style="width: 100%; padding: 13px; font-size: 14px; margin-top: 10px;" onclick="startTrim('audio')">
+              <i data-lucide="scissors"></i> Trim & Save Audio
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: Dedicated Presets Manager -->
     <div class="tab-content" id="tab-presets">
       <div class="content-topbar" style="margin: -16px -20px 14px -20px;">
         <div class="tab-title-box">
@@ -341,7 +839,7 @@
     </div>
   </div>
 
-  <script src="/app.js"></script>
+  <script type="module" src="/js/main.js"></script>
 </body>
 
 </html>

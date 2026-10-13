@@ -611,6 +611,13 @@
       border-color: var(--lavender);
     }
 
+    .form-select:disabled,
+    .form-input:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
     .cmd-preview-box {
       background: var(--bg-base);
       border: 1px solid var(--border-subtle);
@@ -621,6 +628,11 @@
       color: var(--sky);
       word-break: break-all;
       margin-top: 6px;
+    }
+
+    #customCmdInput {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
     }
 
     .checkbox-label {
@@ -1054,3 +1066,585 @@ i.spin-icon {
   display: inline-block;
   transform-origin: center center;
 }
+
+/* ==========================================================================
+   VIDEO & AUDIO CUTTER (TRIMMER) STYLES
+   ========================================================================== */
+
+.cutter-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1080px) {
+  .cutter-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cutter-top-bar {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.cutter-meta-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+}
+
+.cutter-stage {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.cutter-sidebar {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+/* Video Player Screen */
+.video-screen-container {
+  position: relative;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  aspect-ratio: 16 / 9;
+  max-height: 480px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-subtle);
+}
+
+.video-screen-container video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.video-overlay-play {
+  position: absolute;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(16, 18, 26, 0.7);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.video-screen-container:hover .video-overlay-play {
+  opacity: 0.85;
+  pointer-events: auto;
+}
+
+.video-overlay-play:hover {
+  transform: scale(1.1);
+  background: rgba(180, 190, 250, 0.85);
+  color: #10121a;
+  opacity: 1;
+}
+
+.video-timecode-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: rgba(16, 18, 26, 0.8);
+  backdrop-filter: blur(6px);
+  color: var(--text-main);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  letter-spacing: 0.5px;
+  pointer-events: none;
+}
+
+/* Transport Controls Bar */
+.cutter-transport {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.transport-left,
+.transport-center,
+.transport-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.play-main-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50% !important;
+}
+
+.volume-slider {
+  width: 70px;
+  accent-color: var(--lavender);
+  cursor: pointer;
+}
+
+/* Timeline Scrubber & Waveform Bar */
+.timeline-wrapper {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.timeline-ruler {
+  height: 18px;
+  position: relative;
+  border-bottom: 1px solid var(--border-subtle);
+  user-select: none;
+}
+
+.timeline-ruler .ruler-tick {
+  position: absolute;
+  top: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  color: var(--text-muted);
+  transform: translateX(-50%);
+}
+
+.timeline-track {
+  position: relative;
+  height: 56px;
+  background: #141724;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.timeline-waveform-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.timeline-cut-region {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0%;
+  width: 100%;
+  background: rgba(180, 190, 250, 0.18);
+  border-top: 2px solid var(--lavender);
+  border-bottom: 2px solid var(--lavender);
+  pointer-events: none;
+  transition: opacity 0.1s;
+}
+
+.timeline-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  transform: translateX(-50%);
+  cursor: ew-resize;
+  z-index: 10;
+  touch-action: none;
+}
+
+.timeline-handle .handle-flag {
+  position: absolute;
+  top: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8.5px;
+  font-weight: 800;
+  padding: 2px 4px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
+  transform: translateX(-50%);
+  left: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+}
+
+.timeline-handle.handle-in .handle-flag {
+  background: var(--mint);
+  color: #10121a;
+}
+
+.timeline-handle.handle-out .handle-flag {
+  background: var(--rose);
+  color: #10121a;
+}
+
+.timeline-handle .handle-line {
+  position: absolute;
+  top: 14px;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+}
+
+.timeline-handle.handle-in .handle-line {
+  background: var(--mint);
+}
+
+.timeline-handle.handle-out .handle-line {
+  background: var(--rose);
+}
+
+.timeline-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #ffffff;
+  transform: translateX(-50%);
+  z-index: 12;
+  pointer-events: none;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.8);
+}
+
+.timeline-playhead .playhead-head {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 10px;
+  height: 10px;
+  background: #ffffff;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+.timeline-tooltip {
+  position: absolute;
+  bottom: 60px;
+  transform: translateX(-50%);
+  background: rgba(16, 18, 26, 0.95);
+  border: 1px solid var(--border-focus);
+  color: var(--text-main);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 20;
+  white-space: nowrap;
+}
+
+.timeline-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+}
+
+.time-input-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.time-label {
+  font-size: 11.5px;
+  color: var(--text-sub);
+  white-space: nowrap;
+}
+
+.time-code-input {
+  width: 122px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  text-align: center;
+  padding: 6px 8px;
+  letter-spacing: 0.5px;
+}
+
+.duration-badge-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-card);
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+}
+
+/* ==========================================================================
+   AUDIO WAVEFORM STUDIO SPECIFIC STYLES
+   ========================================================================== */
+
+.waveform-studio-box {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.waveform-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: #141724;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.zoom-pill-group {
+  display: flex;
+  background: var(--bg-card);
+  border-radius: 6px;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+}
+
+.zoom-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-sub);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.zoom-btn:hover {
+  color: var(--text-main);
+}
+
+.zoom-btn.active {
+  background: var(--teal);
+  color: #10121a;
+  font-weight: 700;
+}
+
+.waveform-timecode {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--teal);
+  letter-spacing: 0.5px;
+}
+
+.waveform-viewport {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: #0d0f17;
+  user-select: none;
+}
+
+.waveform-ruler {
+  height: 20px;
+  position: relative;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.waveform-ruler .ruler-tick {
+  position: absolute;
+  top: 1px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  color: var(--text-muted);
+  transform: translateX(-50%);
+}
+
+.waveform-canvas-wrap {
+  position: relative;
+  height: 190px;
+  cursor: pointer;
+}
+
+.grand-waveform-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.waveform-cut-region {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0%;
+  width: 100%;
+  background: rgba(130, 218, 205, 0.16);
+  border-top: 2px solid var(--teal);
+  border-bottom: 2px solid var(--teal);
+  pointer-events: none;
+}
+
+.fade-ramp {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+
+.fade-in-ramp {
+  left: 0;
+  width: 0px;
+  background: linear-gradient(to right, rgba(16, 18, 26, 0.75), transparent);
+  border-right: 1px dashed rgba(130, 218, 205, 0.6);
+}
+
+.fade-out-ramp {
+  right: 0;
+  width: 0px;
+  background: linear-gradient(to left, rgba(16, 18, 26, 0.75), transparent);
+  border-left: 1px dashed rgba(130, 218, 205, 0.6);
+}
+
+.waveform-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  transform: translateX(-50%);
+  cursor: ew-resize;
+  z-index: 10;
+  touch-action: none;
+}
+
+.waveform-handle .handle-flag {
+  position: absolute;
+  top: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8.5px;
+  font-weight: 800;
+  padding: 2px 4px;
+  border-radius: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+}
+
+.waveform-handle.handle-in .handle-flag {
+  background: var(--teal);
+  color: #10121a;
+}
+
+.waveform-handle.handle-out .handle-flag {
+  background: var(--coral);
+  color: #10121a;
+}
+
+.waveform-handle .handle-line {
+  position: absolute;
+  top: 14px;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+}
+
+.waveform-handle.handle-in .handle-line {
+  background: var(--teal);
+}
+
+.waveform-handle.handle-out .handle-line {
+  background: var(--coral);
+}
+
+.waveform-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #ffffff;
+  transform: translateX(-50%);
+  z-index: 12;
+  pointer-events: none;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.9);
+}
+
+.waveform-playhead .playhead-head {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 10px;
+  height: 10px;
+  background: #ffffff;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+/* Sidebar Helpers & Status Boxes */
+.cutter-mode-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-top: 6px;
+}
+
+.tip-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.trim-progress-box {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.trim-result-box {
+  background: rgba(166, 227, 161, 0.08);
+  border: 1px solid rgba(166, 227, 161, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+

@@ -11,7 +11,11 @@
         "cmd": "-c:v libx265 -crf 24 -preset medium -tag:v hvc1 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 128k",
         "ext": ".mp4"
     },
-    "Extract MP3 Audio": {
+    "Extract MP3 Audio (320kbps Best Quality)": {
+        "cmd": "-vn -c:a libmp3lame -b:a 320k",
+        "ext": ".mp3"
+    },
+    "Extract MP3 Audio (VBR High Quality)": {
         "cmd": "-vn -c:a libmp3lame -q:a 2",
         "ext": ".mp3"
     }

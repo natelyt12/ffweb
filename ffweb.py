@@ -309,6 +309,266 @@ def run_conversion_task(files, cmd_template, output_ext, delete_after, concurren
             current_job["status"] = "completed"
 
 
+# Global Trim state
+trim_lock = threading.Lock()
+current_trim_job = {
+    "status": "idle",       # idle | running | done | error | cancelled
+    "file": "",
+    "output": "",
+    "progress": 0.0,
+    "speed": "--",
+    "fps": "--",
+    "msg": "",
+    "cmd": "",
+    "log": ""
+}
+active_trim_proc = None
+waveform_cache = {}
+
+def get_audio_waveform(filepath, target_points=1200):
+    if filepath in waveform_cache:
+        return waveform_cache[filepath]
+
+    duration = get_media_duration(filepath)
+    if duration <= 0:
+        return {"success": False, "peaks": [], "duration": 0, "has_audio": False}
+
+    cmd = [
+        'ffmpeg', '-v', 'error', '-i', filepath,
+        '-vn', '-ac', '1', '-ar', '1000',
+        '-f', 's16le', '-'
+    ]
+    creationflags = 0
+    if os.name == 'nt':
+        creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+
+    try:
+        import struct
+        res = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=25,
+            creationflags=creationflags
+        )
+        raw = res.stdout
+        if not raw:
+            res_data = {"success": True, "peaks": [], "duration": duration, "has_audio": False}
+            waveform_cache[filepath] = res_data
+            return res_data
+
+        sample_count = len(raw) // 2
+        if sample_count == 0:
+            res_data = {"success": True, "peaks": [], "duration": duration, "has_audio": False}
+            waveform_cache[filepath] = res_data
+            return res_data
+
+        samples = struct.unpack(f'<{sample_count}h', raw[:sample_count * 2])
+        chunk_size = max(1, sample_count // target_points)
+        peaks = []
+        for i in range(0, sample_count, chunk_size):
+            chunk = samples[i:i + chunk_size]
+            if chunk:
+                val = max(abs(s) for s in chunk) / 32768.0
+                peaks.append(round(val, 3))
+
+        max_val = max(peaks) if peaks else 0
+        if max_val > 0.01:
+            peaks = [round(min(1.0, p / max_val), 3) for p in peaks]
+
+        res_data = {"success": True, "peaks": peaks, "duration": round(duration, 3), "has_audio": True}
+        waveform_cache[filepath] = res_data
+        return res_data
+    except Exception as e:
+        return {"success": False, "peaks": [], "duration": duration, "has_audio": False, "error": str(e)}
+
+def run_trim_task(file_name, output_name, start_sec, end_sec, mode="copy", media_type="video",
+                  audio_format="copy", fade_in=0.0, fade_out=0.0):
+    global current_trim_job, active_trim_proc, current_working_dir
+
+    input_abs = os.path.abspath(os.path.join(current_working_dir, file_name))
+    output_abs = os.path.abspath(os.path.join(current_working_dir, output_name))
+    duration = max(0.001, end_sec - start_sec)
+
+    with trim_lock:
+        current_trim_job["status"] = "running"
+        current_trim_job["file"] = file_name
+        current_trim_job["output"] = output_name
+        current_trim_job["progress"] = 0.0
+        current_trim_job["speed"] = "--"
+        current_trim_job["fps"] = "--"
+        current_trim_job["msg"] = ""
+        current_trim_job["cmd"] = ""
+        current_trim_job["log"] = ""
+
+    start_str = f"{max(0.0, start_sec):.3f}"
+    end_str = f"{end_sec:.3f}"
+
+    cmd_args = ['ffmpeg', '-y']
+
+    if media_type == "video":
+        if mode == "copy":
+            cmd_args.extend([
+                '-ss', start_str,
+                '-to', end_str,
+                '-i', input_abs,
+                '-c', 'copy',
+                '-avoid_negative_ts', 'make_zero',
+                '-map', '0'
+            ])
+        elif mode == "audio_only":
+            cmd_args.extend([
+                '-ss', start_str,
+                '-to', end_str,
+                '-i', input_abs,
+                '-vn',
+                '-c:a', 'libmp3lame',
+                '-b:a', '320k'
+            ])
+        else: # encode
+            cmd_args.extend([
+                '-ss', start_str,
+                '-to', end_str,
+                '-i', input_abs,
+                '-c:v', 'libx264',
+                '-crf', '19',
+                '-preset', 'fast',
+                '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac',
+                '-b:a', '192k',
+                '-movflags', '+faststart'
+            ])
+    else: # audio
+        audio_filters = []
+        if fade_in > 0:
+            audio_filters.append(f"afade=t=in:ss=0:d={fade_in:.2f}")
+        if fade_out > 0:
+            st = max(0.0, duration - fade_out)
+            audio_filters.append(f"afade=t=out:st={st:.2f}:d={fade_out:.2f}")
+
+        has_filters = len(audio_filters) > 0
+
+        cmd_args.extend(['-ss', start_str, '-to', end_str, '-i', input_abs])
+
+        if has_filters:
+            cmd_args.extend(['-af', ','.join(audio_filters)])
+
+        if not has_filters and (mode == "copy" or audio_format == "copy"):
+            cmd_args.extend(['-c', 'copy'])
+        else:
+            fmt = audio_format.lower()
+            if fmt == 'mp3':
+                cmd_args.extend(['-c:a', 'libmp3lame', '-b:a', '320k'])
+            elif fmt == 'aac':
+                cmd_args.extend(['-c:a', 'aac', '-b:a', '256k'])
+            elif fmt == 'wav':
+                cmd_args.extend(['-c:a', 'pcm_s16le'])
+            elif fmt == 'flac':
+                cmd_args.extend(['-c:a', 'flac'])
+            elif fmt == 'm4a':
+                cmd_args.extend(['-c:a', 'aac', '-b:a', '256k'])
+            else:
+                cmd_args.extend(['-c:a', 'libmp3lame', '-b:a', '320k'])
+
+    cmd_args.extend(['-progress', 'pipe:1', output_abs])
+
+    full_cmd_str = ' '.join(cmd_args)
+    with trim_lock:
+        current_trim_job["cmd"] = full_cmd_str
+
+    print(f"\n[FFmpeg Trim Started] {file_name} -> {output_name}\nCommand: {full_cmd_str}")
+
+    creationflags = 0
+    if os.name == 'nt':
+        creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+
+    proc = None
+    stderr_lines = []
+    try:
+        proc = subprocess.Popen(
+            cmd_args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=current_working_dir,
+            universal_newlines=True,
+            creationflags=creationflags
+        )
+        active_trim_proc = proc
+
+        def read_stderr():
+            try:
+                for s_line in proc.stderr:
+                    s_line = s_line.rstrip()
+                    if s_line:
+                        stderr_lines.append(s_line)
+                        if len(stderr_lines) > 200:
+                            stderr_lines.pop(0)
+            except Exception:
+                pass
+
+        t_err = threading.Thread(target=read_stderr, daemon=True)
+        t_err.start()
+
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            if '=' in line:
+                k, v = line.split('=', 1)
+                k = k.strip()
+                v = v.strip()
+                with trim_lock:
+                    if current_trim_job["status"] == "cancelled":
+                        break
+                    if k == 'out_time_ms':
+                        try:
+                            cur_sec = float(v) / 1000000.0
+                            if duration > 0:
+                                pct = min(99.0, (cur_sec / duration) * 100.0)
+                                current_trim_job["progress"] = round(pct, 1)
+                        except Exception:
+                            pass
+                    elif k == 'speed':
+                        current_trim_job["speed"] = v
+                    elif k == 'fps':
+                        current_trim_job["fps"] = v
+
+        proc.wait()
+        t_err.join(timeout=1.0)
+    except Exception as e:
+        stderr_lines.append(str(e))
+    finally:
+        active_trim_proc = None
+
+    with trim_lock:
+        current_trim_job["log"] = "\n".join(stderr_lines)
+        if current_trim_job["status"] == "cancelled":
+            try:
+                if os.path.exists(output_abs):
+                    os.remove(output_abs)
+            except Exception:
+                pass
+            return
+
+        if proc is not None and proc.returncode == 0:
+            current_trim_job["status"] = "done"
+            current_trim_job["progress"] = 100.0
+            current_trim_job["msg"] = "Success"
+        else:
+            err_msg = ""
+            for s_l in reversed(stderr_lines):
+                if any(w in s_l.lower() for w in ["error", "invalid", "does not contain", "could not", "failed", "unsupported"]):
+                    err_msg = s_l
+                    break
+            if not err_msg and stderr_lines:
+                err_msg = stderr_lines[-1]
+            if not err_msg:
+                err_msg = f"FFmpeg exited with code {proc.returncode if proc else 'failed'}"
+
+            current_trim_job["status"] = "error"
+            current_trim_job["msg"] = err_msg
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
@@ -376,6 +636,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if path == "/api/status":
             with job_lock:
                 self.send_json(current_job)
+            return
+
+        if path == "/api/waveform":
+            filename = query.get("file", [""])[0]
+            if not filename:
+                self.send_json({"success": False, "error": "Missing file parameter"}, status=400)
+                return
+            filepath = os.path.abspath(os.path.join(current_working_dir, filename))
+            if not os.path.isfile(filepath):
+                self.send_json({"success": False, "error": "File not found"}, status=404)
+                return
+            data = get_audio_waveform(filepath)
+            self.send_json(data)
+            return
+
+        if path == "/api/trim-status":
+            with trim_lock:
+                self.send_json(current_trim_job)
             return
 
         if path == "/api/preview":
@@ -572,6 +850,55 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         pass
                 current_job["created_outputs"].clear()
             self.send_json({"success": True, "message": "All batch tasks cancelled and generated outputs deleted."})
+            return
+
+        if path == "/api/trim":
+            file_name = body.get("file", "").strip()
+            output_name = body.get("output_name", "").strip()
+            start_sec = float(body.get("start", 0.0))
+            end_sec = float(body.get("end", 0.0))
+            mode = body.get("mode", "copy").strip()
+            media_type = body.get("type", "video").strip()
+            audio_format = body.get("format", "copy").strip()
+            fade_in = float(body.get("fade_in", 0.0))
+            fade_out = float(body.get("fade_out", 0.0))
+
+            if not file_name or os.path.sep in file_name or '/' in file_name:
+                self.send_json({"success": False, "error": "Invalid input file."}, status=400)
+                return
+            if not output_name or os.path.sep in output_name or '/' in output_name:
+                self.send_json({"success": False, "error": "Invalid output file name."}, status=400)
+                return
+            input_abs = os.path.join(current_working_dir, file_name)
+            if not os.path.isfile(input_abs):
+                self.send_json({"success": False, "error": "File not found."}, status=404)
+                return
+            if end_sec <= start_sec:
+                self.send_json({"success": False, "error": "End time must be greater than start time."}, status=400)
+                return
+
+            with trim_lock:
+                if current_trim_job["status"] == "running":
+                    self.send_json({"success": False, "error": "A trim job is already running."}, status=409)
+                    return
+
+            threading.Thread(
+                target=run_trim_task,
+                args=(file_name, output_name, start_sec, end_sec, mode, media_type, audio_format, fade_in, fade_out),
+                daemon=True
+            ).start()
+            self.send_json({"success": True, "message": "Trim process started."})
+            return
+
+        if path == "/api/cancel-trim":
+            with trim_lock:
+                current_trim_job["status"] = "cancelled"
+            if active_trim_proc:
+                try:
+                    active_trim_proc.kill()
+                except Exception:
+                    pass
+            self.send_json({"success": True, "message": "Trim cancelled."})
             return
 
         if path == "/api/rename":
