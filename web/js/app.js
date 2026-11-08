@@ -151,7 +151,6 @@ function setBusy(busy) {
 // --- waveform ---------------------------------------------------------------
 
 function drawWaveform() {
-  if (state.type !== "audio") return;
   const canvas = ui.waveCanvas;
   const rect = canvas.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
@@ -388,7 +387,20 @@ player().addEventListener("timeupdate", () => {
 });
 
 window.addEventListener("resize", () => {
-  if (state.type === "audio") drawWaveform();
+  drawWaveform();
+});
+
+window.addEventListener("keydown", (event) => {
+  if (event.code !== "Space") return;
+  const tag = (event.target && event.target.tagName) || "";
+  if (["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(tag)) return;
+  event.preventDefault();
+  const media = player();
+  if (media.paused) {
+    media.play().catch(() => {});
+  } else {
+    media.pause();
+  }
 });
 
 // --- boot -------------------------------------------------------------------
@@ -421,21 +433,20 @@ async function boot() {
     ui.formatField.hidden = false;
     ui.fadeInField.hidden = false;
     ui.fadeOutField.hidden = false;
-    ui.waveCanvas.hidden = false;
     ui.audioPlayer.src = "/api/media";
-    const wave = await (await fetch("/api/waveform")).json();
-    state.peaks = wave.peaks || [];
-    if (!state.duration && wave.duration) {
-      state.duration = wave.duration;
-      state.outTime = state.duration;
-    }
+  }
+
+  ui.waveCanvas.hidden = false;
+  const wave = await (await fetch("/api/waveform")).json();
+  state.peaks = wave.peaks || [];
+  if (!state.duration && wave.duration) {
+    state.duration = wave.duration;
+    state.outTime = state.duration;
   }
 
   renderTimeline();
   updateOutputName();
-  requestAnimationFrame(() => {
-    if (state.type === "audio") drawWaveform();
-  });
+  requestAnimationFrame(drawWaveform);
   ui.cutBtn.disabled = !(state.duration > 0);
   if (!state.duration) setStatus("Could not read the duration of this file", true);
 }

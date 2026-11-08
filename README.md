@@ -95,7 +95,8 @@ confirmation. Images get `View`, `Rename` and `Delete`.
 
 `Back` (or `Esc`) never throws away your work: from the preset menu, the
 post-process menu or the concurrency menu it returns to the file list with your
-selection still checked.
+selection still checked - and the row you were on stays focused, even after a
+`Cut` refreshes the folder.
 
 ---
 
@@ -147,11 +148,14 @@ Built-in presets:
 Pick `Cut` on an audio or video row and `ffcli` starts `ffcli_web.py` for **that
 one file** and opens it in your browser:
 
-- **Video** - preview player, a timeline with draggable In/Out handles, timecode
-  inputs, and three modes: *stream copy* (fast, keyframe aligned), *re-encode*
-  (frame accurate, H.264 CRF 19 + AAC) or *extract audio* (MP3 320k).
+- **Video** - preview player, a timeline with the audio waveform behind it and
+  draggable In/Out handles, timecode inputs, and three modes: *stream copy*
+  (fast, keyframe aligned), *re-encode* (frame accurate, H.264 CRF 19 + AAC) or
+  *extract audio* (MP3 320k).
 - **Audio** - waveform canvas with draggable In/Out handles, fade in / fade out,
   and export as copy, MP3 320k, WAV, FLAC or AAC 256k.
+
+Only the player that matches the file is shown, and `Space` plays or pauses it.
 
 The output is always `<name>_output.<ext>` next to the source. When the cut
 finishes the page reports it, tries to close its own tab and stops the server, so

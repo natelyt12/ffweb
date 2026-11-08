@@ -346,10 +346,25 @@ class CutterHandler(BaseHTTPRequestHandler):
                         break
                     self.wfile.write(block)
                     remaining -= len(block)
-        except (ConnectionResetError, BrokenPipeError):
+        except ConnectionError:
+            # the browser aborted the stream (seek/close); nothing to report
             pass
         except OSError as exc:
-            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+            try:
+                self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+            except OSError:
+                pass
+
+
+class CutterServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        """Aborted player connections are routine - keep the terminal quiet."""
+        error = sys.exc_info()[1]
+        if isinstance(error, (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
 
 
 def open_browser(url):
@@ -391,11 +406,10 @@ def main():
     TARGET_TYPE = media_type(candidate)
 
     try:
-        httpd = ThreadingHTTPServer(("127.0.0.1", port), CutterHandler)
+        httpd = CutterServer(("127.0.0.1", port), CutterHandler)
     except OSError as exc:
         print(f"[ffcli] cannot bind port {port}: {exc}", file=sys.stderr)
         return 1
-    httpd.daemon_threads = True
 
     url = f"http://127.0.0.1:{port}/"
     print(f"\n[ffcli] cutting {os.path.basename(TARGET)}")

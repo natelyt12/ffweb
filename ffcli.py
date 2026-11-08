@@ -288,7 +288,7 @@ def _group_targets(options, group):
 
 def interactive_menu(title, options, subtitle=None, max_visible=None,
                      multi_select=False, enable_filter=False, sort_mode="name",
-                     initial_selected=None, on_action=None):
+                     initial_selected=None, on_action=None, focus_state=None):
     """Scrollable menu with multi-select and per-row actions.
 
     With `enable_filter` the first two rows are a live filter and a sort switch
@@ -300,6 +300,10 @@ def interactive_menu(title, options, subtitle=None, max_visible=None,
     When that callback returns True the menu stops and `MENU_REFRESH` is
     returned so the caller can rebuild the list.
 
+    `focus_state` is an optional dict the caller keeps between calls: the payload
+    of the focused row is stored in it and restored on the next call, so
+    rebuilding the menu after a row action does not reset the cursor.
+
     Returns the chosen option index (-1 when cancelled), the list of selected
     indices when `multi_select` is set, or `MENU_REFRESH`.
     """
@@ -307,6 +311,9 @@ def interactive_menu(title, options, subtitle=None, max_visible=None,
     if not INTERACTIVE:
         return _plain_menu(title, options, subtitle, multi_select)
 
+    focus_state = focus_state if focus_state is not None else {}
+    restore_payload = focus_state.get("payload")
+    first_pass = True
     has_files = any(option.kind == KIND_FILE for option in options)
     query = ""
     sort = sort_mode if sort_mode in SORT_MODES else "name"
@@ -334,9 +341,19 @@ def interactive_menu(title, options, subtitle=None, max_visible=None,
         rows = rows_now()
         total = len(rows)
         if total:
+            if first_pass:
+                first_pass = False
+                if restore_payload:
+                    for row_index, entry in enumerate(rows):
+                        if entry[0] == "option" and options[entry[1]].payload == restore_payload:
+                            cursor = row_index
+                            break
             cursor = min(cursor, total - 1)
             if not _entry_selectable(rows, options, cursor):
                 cursor = _move(rows, options, cursor, 1)
+            entry = rows[cursor]
+            if entry[0] == "option" and options[entry[1]].payload is not None:
+                focus_state["payload"] = options[entry[1]].payload
 
         try:
             term_lines = os.get_terminal_size().lines
@@ -679,6 +696,7 @@ def prompt_manual_command(default_ext):
 
 def run_process_flow(presets, directory):
     picked = set()
+    focus = {}
     options = []
 
     def perform(index, action):
@@ -699,6 +717,7 @@ def run_process_flow(presets, directory):
             initial_selected=[i for i, o in enumerate(options)
                               if o.kind == KIND_FILE and o.payload in picked],
             on_action=perform,
+            focus_state=focus,
         )
         if chosen == MENU_REFRESH:
             continue
