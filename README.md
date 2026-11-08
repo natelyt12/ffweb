@@ -68,8 +68,10 @@ Run `ffcli` with no arguments inside a media folder:
 | Key | Action |
 | :--- | :--- |
 | `↑` / `↓` | Move (separators are skipped) |
-| `Enter` | Confirm / open the focused row |
-| `Esc` | Back |
+| `→` | Focus the `View` button on the highlighted file |
+| `←` | Leave the `View` button |
+| `Enter` | Confirm, or open the file when `View` is focused |
+| `Esc` | Back - returns to the file list from any sub-menu |
 | `Space` | Toggle a file or a whole extension group |
 
 The file picker starts with two control rows:
@@ -79,9 +81,13 @@ The file picker starts with two control rows:
   `file group (.ext)`.
 
 Below them sit the `Select ALL .mp4` style toggles and the files themselves, each
-with its extension, name and size. After picking files you choose a preset or a
-custom command, whether to delete the originals, and how many FFmpeg processes to
-run at once.
+with its extension, name and size. Move onto a file, press `→` to select its
+`View` button, then `Enter` to open it in your default media player - handy for
+checking a take before converting it.
+
+`Back` (or `Esc`) never throws away your work: from the preset menu, the
+post-process menu or the concurrency menu it returns to the file list with your
+selection still checked.
 
 ---
 

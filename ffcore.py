@@ -15,6 +15,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import threading
 import time
 
@@ -231,6 +232,23 @@ def tool_path(name):
 
 def missing_tools():
     return [name for name in TOOLS if not tool_path(name)]
+
+
+def open_path(path):
+    """Open a file with the OS default application. Returns True when launched."""
+    if not os.path.exists(path):
+        return False
+    try:
+        if os.name == "nt":
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+        return True
+    except (OSError, AttributeError):
+        return False
+
 
 
 def probe_duration(path):

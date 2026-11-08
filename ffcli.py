@@ -268,12 +268,15 @@ def _group_targets(options, group):
 
 
 def interactive_menu(title, options, subtitle=None, max_visible=None,
-                     multi_select=False, enable_filter=False, sort_mode="name"):
+                     multi_select=False, enable_filter=False, sort_mode="name",
+                     initial_selected=None):
     """Scrollable menu with multi-select.
 
     With `enable_filter` the first two rows are a live filter and a sort switch
     (name / date added / file group). Separator rows are never focusable, so the
-    cursor cannot land on them and Enter can never pick one.
+    cursor cannot land on them and Enter can never pick one. On file rows the
+    right arrow focuses a `View` button that opens the file with the OS default
+    player.
 
     Returns the chosen option index (-1 when cancelled), or the list of selected
     indices when `multi_select` is set.
@@ -282,10 +285,12 @@ def interactive_menu(title, options, subtitle=None, max_visible=None,
     if not INTERACTIVE:
         return _plain_menu(title, options, subtitle, multi_select)
 
+    has_files = any(option.kind == KIND_FILE for option in options)
     query = ""
     sort = sort_mode if sort_mode in SORT_MODES else "name"
     cursor = 0
-    selected = set()
+    selected = set(initial_selected or ())
+    view_focus = False
     pinned = 2 if enable_filter else 0
 
     def rows_now():
@@ -355,7 +360,11 @@ def interactive_menu(title, options, subtitle=None, max_visible=None,
 
             tint = UI.SELECT if focused else UI.WHITE
             body_text = option.label.replace(UI.END, UI.END + tint) if UI.END in option.label else option.label
-            sys.stdout.write(f" {marker}{prefix}{tint}{body_text}{UI.END}\033[K\n")
+            sys.stdout.write(f" {marker}{prefix}{tint}{body_text}{UI.END}")
+            if option.kind == KIND_FILE and focused:
+                chip = f"{UI.GREEN}{UI.BOLD}[ View ]{UI.END}" if view_focus else f"{UI.GRAY}[ View ]{UI.END}"
+                sys.stdout.write(f"  {chip}")
+            sys.stdout.write("\033[K\n")
 
         sys.stdout.write(UI.HOME_CURSOR + UI.HIDE_CURSOR)
         sys.stdout.write(f"{UI.HEADER}{UI.BOLD}=== {title} ==={UI.END}\033[K\n")
@@ -377,16 +386,26 @@ def interactive_menu(title, options, subtitle=None, max_visible=None,
         help_text = "↑/↓: Move | Enter: Confirm | Esc: Back"
         if multi_select:
             help_text += " | Space: Toggle"
+        if has_files:
+            help_text += " | →: View"
         sys.stdout.write(f"{UI.CYAN}({help_text}){scroll}{UI.END}\033[K\n")
         sys.stdout.write("\033[J")
         sys.stdout.flush()
 
         key = get_key()
         if key == "up":
+            view_focus = False
             cursor = _move(rows, options, cursor, -1)
             continue
         if key == "down":
+            view_focus = False
             cursor = _move(rows, options, cursor, 1)
+            continue
+        if key in ("left", "right"):
+            if total:
+                entry = rows[cursor]
+                if entry[0] == "option" and options[entry[1]].kind == KIND_FILE:
+                    view_focus = key == "right"
             continue
         if key == "esc":
             sys.stdout.write(UI.SHOW_CURSOR)
@@ -404,6 +423,12 @@ def interactive_menu(title, options, subtitle=None, max_visible=None,
                     else:
                         selected.update(targets)
             continue
+        if key == "enter" and view_focus and total:
+            entry = rows[cursor]
+            if entry[0] == "option" and options[entry[1]].kind == KIND_FILE:
+                ffcore.open_path(options[entry[1]].payload)
+                view_focus = False
+                continue
         if key != "enter" or not total:
             continue
 
@@ -579,7 +604,7 @@ def build_file_menu(files, directory):
             group=os.path.splitext(name)[1].lower(),
             sort_name=name,
             sort_added=added,
-            payload=name,
+            payload=full_path,
         ))
     return options
 
@@ -622,68 +647,75 @@ def run_process_flow(presets, directory):
         pause()
         return
 
-    options = build_file_menu(files, directory)
-    chosen = interactive_menu(
-        "SELECT MEDIA FILES", options,
-        subtitle="Space: toggle a file | Enter: confirm | Filter/Sort rows on top",
-        multi_select=True, enable_filter=True,
-    )
-    if not chosen:
-        return
-
-    selected = [os.path.join(directory, options[index].payload) for index in chosen]
-    action = interactive_menu(f"PROCESS: {len(selected)} file(s) selected", [
-        "Use a saved preset",
-        "Enter a custom ffmpeg command",
-        "---",
-        "Back",
-    ])
-    if action in (-1, 3):
-        return
-
-    if action == 0:
-        name = choose_preset(presets)
-        if not name:
+    picked = set()
+    while True:
+        options = build_file_menu(files, directory)
+        chosen = interactive_menu(
+            "SELECT MEDIA FILES", options,
+            subtitle="Space: toggle a file | →: View | Enter: confirm | Filter/Sort rows on top",
+            multi_select=True, enable_filter=True,
+            initial_selected=[i for i, o in enumerate(options)
+                              if o.kind == KIND_FILE and o.payload in picked],
+        )
+        if not chosen:
             return
-        args = ffcore.parse_args(presets[name]["cmd"])
-        ext = presets[name]["ext"]
-        print(f"\n{UI.GRAY}Preset:{UI.END} {UI.CYAN}{name}{UI.END} {UI.GRAY}-> {ext}{UI.END}")
-    else:
-        default_ext = os.path.splitext(selected[0])[1].lower()
-        manual = prompt_manual_command(default_ext)
-        if not manual:
-            return
-        args, ext = manual
 
-    post = interactive_menu("AFTER A SUCCESSFUL RUN", [
-        "Keep the original files (safe)",
-        "Delete the originals",
-        "---",
-        "Back",
-    ])
-    if post in (-1, 3):
-        return
-    delete_after = post == 1
+        selected = [options[index].payload for index in chosen]
+        picked = set(selected)
 
-    jobs = 1
-    if len(selected) > 1:
-        concurrency = interactive_menu("PARALLEL FFMPEG PROCESSES", [
-            "Sequential (1 at a time)",
-            "2 processes",
-            "3 processes",
-            "4 processes",
+        action = interactive_menu(f"PROCESS: {len(selected)} file(s) selected", [
+            "Use a saved preset",
+            "Enter a custom ffmpeg command",
             "---",
             "Back",
         ])
-        if concurrency in (-1, 5):
-            return
-        jobs = concurrency + 1
+        if action in (-1, 3):
+            continue
 
-    print("\033[2J\033[H", end="")
-    print(f"{UI.HEADER}{UI.BOLD}=== PROCESSING {len(selected)} FILE(S) | {jobs} WORKER(S) ==={UI.END}")
-    print(f"{UI.GRAY}{ffcore.format_args(args)}{UI.END}\n")
-    execute_jobs(selected, args, ext, jobs=jobs, delete_after=delete_after)
-    pause()
+        if action == 0:
+            name = choose_preset(presets)
+            if not name:
+                continue
+            args = ffcore.parse_args(presets[name]["cmd"])
+            ext = presets[name]["ext"]
+            print(f"\n{UI.GRAY}Preset:{UI.END} {UI.CYAN}{name}{UI.END} {UI.GRAY}-> {ext}{UI.END}")
+        else:
+            default_ext = os.path.splitext(selected[0])[1].lower()
+            manual = prompt_manual_command(default_ext)
+            if not manual:
+                continue
+            args, ext = manual
+
+        post = interactive_menu("AFTER A SUCCESSFUL RUN", [
+            "Keep the original files (safe)",
+            "Delete the originals",
+            "---",
+            "Back",
+        ])
+        if post in (-1, 3):
+            continue
+        delete_after = post == 1
+
+        jobs = 1
+        if len(selected) > 1:
+            concurrency = interactive_menu("PARALLEL FFMPEG PROCESSES", [
+                "Sequential (1 at a time)",
+                "2 processes",
+                "3 processes",
+                "4 processes",
+                "---",
+                "Back",
+            ])
+            if concurrency in (-1, 5):
+                continue
+            jobs = concurrency + 1
+
+        print("\033[2J\033[H", end="")
+        print(f"{UI.HEADER}{UI.BOLD}=== PROCESSING {len(selected)} FILE(S) | {jobs} WORKER(S) ==={UI.END}")
+        print(f"{UI.GRAY}{ffcore.format_args(args)}{UI.END}\n")
+        execute_jobs(selected, args, ext, jobs=jobs, delete_after=delete_after)
+        pause()
+        return
 
 
 def show_presets(presets, config):
