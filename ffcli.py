@@ -5,9 +5,9 @@
 type your own FFmpeg options), run 1-4 conversions in parallel, and manage the
 preset library.
 
-Cutting (trim / waveform) is intentionally not reimplemented here: the menu's
-"Open the web cutter" entry starts the dashboard in `ffcli_web.py`, which owns
-that job.
+Each audio/video row also offers View / Rename / Cut / Delete. Cut opens the
+single-file cutter in `ffcli_web.py` - a focused page that trims just that file
+and exits when it is done, writing `<name>_output.<ext>`.
 
 Standard library only.
 """
@@ -202,6 +202,15 @@ KIND_SEPARATOR = "separator"
 KIND_TOGGLE = "toggle"
 KIND_FILE = "file"
 
+MENU_REFRESH = "__refresh__"
+
+ACTION_LABELS = {
+    "view": "View",
+    "rename": "Rename",
+    "cut": "Cut",
+    "delete": "Delete",
+}
+
 SORT_MODES = ("name", "added", "group")
 SORT_LABELS = {
     "name": "name (A-Z)",
@@ -210,19 +219,29 @@ SORT_LABELS = {
 }
 
 
-class Option:
-    """A menu row plus the metadata the filter and the sort switches need."""
+def file_actions(kind):
+    """Row actions offered for a media kind, in display order."""
+    if kind in ("video", "audio"):
+        return ("view", "rename", "cut", "delete")
+    if kind == "image":
+        return ("view", "rename", "delete")
+    return ()
 
-    __slots__ = ("label", "kind", "group", "sort_name", "sort_added", "payload")
+
+class Option:
+    """A menu row plus the metadata the filter, the sort and the row actions need."""
+
+    __slots__ = ("label", "kind", "group", "sort_name", "sort_added", "payload", "actions")
 
     def __init__(self, label, kind=KIND_PLAIN, group="", sort_name=None,
-                 sort_added=0.0, payload=None):
+                 sort_added=0.0, payload=None, actions=()):
         self.label = label
         self.kind = kind
         self.group = group
         self.sort_name = strip_ansi(label) if sort_name is None else sort_name
         self.sort_added = sort_added
         self.payload = payload
+        self.actions = tuple(actions)
 
     @property
     def selectable(self):
@@ -269,17 +288,20 @@ def _group_targets(options, group):
 
 def interactive_menu(title, options, subtitle=None, max_visible=None,
                      multi_select=False, enable_filter=False, sort_mode="name",
-                     initial_selected=None):
-    """Scrollable menu with multi-select.
+                     initial_selected=None, on_action=None):
+    """Scrollable menu with multi-select and per-row actions.
 
     With `enable_filter` the first two rows are a live filter and a sort switch
     (name / date added / file group). Separator rows are never focusable, so the
-    cursor cannot land on them and Enter can never pick one. On file rows the
-    right arrow focuses a `View` button that opens the file with the OS default
-    player.
+    cursor cannot land on them and Enter can never pick one.
 
-    Returns the chosen option index (-1 when cancelled), or the list of selected
-    indices when `multi_select` is set.
+    Rows carrying `Option.actions` show them as buttons on the focused row; the
+    right/left arrows focus them and Enter calls `on_action(option_index, name)`.
+    When that callback returns True the menu stops and `MENU_REFRESH` is
+    returned so the caller can rebuild the list.
+
+    Returns the chosen option index (-1 when cancelled), the list of selected
+    indices when `multi_select` is set, or `MENU_REFRESH`.
     """
     options = [_as_option(option) for option in options]
     if not INTERACTIVE:
@@ -290,7 +312,7 @@ def interactive_menu(title, options, subtitle=None, max_visible=None,
     sort = sort_mode if sort_mode in SORT_MODES else "name"
     cursor = 0
     selected = set(initial_selected or ())
-    view_focus = False
+    action_index = None
     pinned = 2 if enable_filter else 0
 
     def rows_now():
@@ -361,9 +383,13 @@ def interactive_menu(title, options, subtitle=None, max_visible=None,
             tint = UI.SELECT if focused else UI.WHITE
             body_text = option.label.replace(UI.END, UI.END + tint) if UI.END in option.label else option.label
             sys.stdout.write(f" {marker}{prefix}{tint}{body_text}{UI.END}")
-            if option.kind == KIND_FILE and focused:
-                chip = f"{UI.GREEN}{UI.BOLD}[ View ]{UI.END}" if view_focus else f"{UI.GRAY}[ View ]{UI.END}"
-                sys.stdout.write(f"  {chip}")
+            if option.actions and focused:
+                chips = []
+                for position, action in enumerate(option.actions):
+                    chip = f"[ {ACTION_LABELS.get(action, action)} ]"
+                    chips.append(f"{UI.GREEN}{UI.BOLD}{chip}{UI.END}" if action_index == position
+                                 else f"{UI.GRAY}{chip}{UI.END}")
+                sys.stdout.write("  " + " ".join(chips))
             sys.stdout.write("\033[K\n")
 
         sys.stdout.write(UI.HOME_CURSOR + UI.HIDE_CURSOR)
@@ -387,25 +413,29 @@ def interactive_menu(title, options, subtitle=None, max_visible=None,
         if multi_select:
             help_text += " | Space: Toggle"
         if has_files:
-            help_text += " | →: View"
+            help_text += " | →: Row actions"
         sys.stdout.write(f"{UI.CYAN}({help_text}){scroll}{UI.END}\033[K\n")
         sys.stdout.write("\033[J")
         sys.stdout.flush()
 
         key = get_key()
         if key == "up":
-            view_focus = False
+            action_index = None
             cursor = _move(rows, options, cursor, -1)
             continue
         if key == "down":
-            view_focus = False
+            action_index = None
             cursor = _move(rows, options, cursor, 1)
             continue
         if key in ("left", "right"):
             if total:
                 entry = rows[cursor]
-                if entry[0] == "option" and options[entry[1]].kind == KIND_FILE:
-                    view_focus = key == "right"
+                if entry[0] == "option" and options[entry[1]].actions:
+                    actions = options[entry[1]].actions
+                    if key == "right":
+                        action_index = 0 if action_index is None else min(action_index + 1, len(actions) - 1)
+                    else:
+                        action_index = None if action_index in (None, 0) else action_index - 1
             continue
         if key == "esc":
             sys.stdout.write(UI.SHOW_CURSOR)
@@ -423,12 +453,17 @@ def interactive_menu(title, options, subtitle=None, max_visible=None,
                     else:
                         selected.update(targets)
             continue
-        if key == "enter" and view_focus and total:
+        if key == "enter" and action_index is not None and total:
             entry = rows[cursor]
-            if entry[0] == "option" and options[entry[1]].kind == KIND_FILE:
-                ffcore.open_path(options[entry[1]].payload)
-                view_focus = False
-                continue
+            if entry[0] == "option":
+                option = options[entry[1]]
+                if option.actions and on_action is not None:
+                    if on_action(entry[1], option.actions[action_index]):
+                        print()
+                        sys.stdout.write(UI.SHOW_CURSOR)
+                        return MENU_REFRESH
+                    action_index = None
+                    continue
         if key != "enter" or not total:
             continue
 
@@ -597,6 +632,7 @@ def build_file_menu(files, directory):
             added = 0.0
         kind_color = {"video": UI.HEADER, "audio": UI.BLUE, "image": UI.YELLOW}.get(
             ffcore.Media.kind(name), UI.GRAY)
+        kind = ffcore.Media.kind(name)
         options.append(Option(
             f"{kind_color}{ffcore.Media.ext_label(name)}{UI.END} {name} "
             f"{UI.GRAY}({ffcore.Media.human_size(full_path)}){UI.END}",
@@ -605,6 +641,7 @@ def build_file_menu(files, directory):
             sort_name=name,
             sort_added=added,
             payload=full_path,
+            actions=file_actions(kind),
         ))
     return options
 
@@ -641,22 +678,30 @@ def prompt_manual_command(default_ext):
 
 
 def run_process_flow(presets, directory):
-    files = ffcore.Media.list_dir(directory)
-    if not files:
-        print(f"\n{UI.RED}No media files found in {directory}{UI.END}")
-        pause()
-        return
-
     picked = set()
+    options = []
+
+    def perform(index, action):
+        return file_action(directory, action, options[index].payload)
+
     while True:
+        files = ffcore.Media.list_dir(directory)
+        if not files:
+            print(f"\n{UI.RED}No media files found in {directory}{UI.END}")
+            pause()
+            return
+
         options = build_file_menu(files, directory)
         chosen = interactive_menu(
             "SELECT MEDIA FILES", options,
-            subtitle="Space: toggle a file | →: View | Enter: confirm | Filter/Sort rows on top",
+            subtitle="Space: toggle | →: View / Rename / Cut / Delete | Enter: convert",
             multi_select=True, enable_filter=True,
             initial_selected=[i for i, o in enumerate(options)
                               if o.kind == KIND_FILE and o.payload in picked],
+            on_action=perform,
         )
+        if chosen == MENU_REFRESH:
+            continue
         if not chosen:
             return
 
@@ -838,22 +883,85 @@ def show_preset_location(config):
     pause()
 
 
-def summon_web(target, port=None):
+def cut_in_web(path):
+    """Open the single-file cutter for `path`; it exits when the cut is done."""
     launcher = os.path.join(ffcore.SCRIPT_DIR, "ffcli_web.py")
     if not os.path.exists(launcher):
-        print(f"{UI.RED}✗ Web UI not found: {launcher}{UI.END}")
-        return 1
-    if os.path.isfile(target):
-        target = os.path.dirname(target)
-    argv = [sys.executable, launcher]
-    if port:
-        argv.append(str(port))
-    argv.append(target)
-    print(f"{UI.GRAY}Starting the web cutter for {target} ...{UI.END}")
+        print(f"{UI.RED}Cutter not found: {launcher}{UI.END}")
+        pause()
+        return False
+
+    print(f"\n{UI.GRAY}Opening the cutter for {os.path.basename(path)}"
+          f" - the menu comes back when the cut finishes.{UI.END}\n")
     try:
-        return subprocess.call(argv)
+        subprocess.call([sys.executable, launcher, path])
     except KeyboardInterrupt:
-        return 0
+        print(f"\n{UI.GRAY}Cutter stopped.{UI.END}")
+        return True
+    except OSError as exc:
+        print(f"{UI.RED}Could not start the cutter: {exc}{UI.END}")
+        pause()
+        return False
+    return True
+
+
+def file_action(directory, action, path):
+    """Run a row action. Returns True when the caller should rebuild the list."""
+    name = os.path.basename(path)
+
+    if action == "view":
+        if not ffcore.open_path(path):
+            print(f"\n{UI.RED}Could not open {name}{UI.END}")
+            pause()
+        return False
+
+    if action == "rename":
+        new_name = interactive_input(f"{UI.BOLD}Rename{UI.END} {name} -> ", name)
+        if new_name is None:
+            return False
+        new_name = new_name.strip()
+        if not new_name or new_name == name:
+            return False
+        if os.path.basename(new_name) != new_name or new_name in (".", ".."):
+            print(f"\n{UI.RED}A file name cannot contain a folder path.{UI.END}")
+            pause()
+            return False
+        target = os.path.join(directory, new_name)
+        if os.path.exists(target):
+            print(f"\n{UI.RED}'{new_name}' already exists.{UI.END}")
+            pause()
+            return False
+        try:
+            os.rename(path, target)
+        except OSError as exc:
+            print(f"\n{UI.RED}Rename failed: {exc}{UI.END}")
+            pause()
+            return False
+        print(f"\n{UI.GREEN}✓ Renamed to {new_name}{UI.END}")
+        pause()
+        return True
+
+    if action == "cut":
+        return cut_in_web(path)
+
+    if action == "delete":
+        confirm = interactive_menu(f"DELETE {name}", [
+            "No, keep it",
+            "Yes, delete it",
+        ], subtitle="This cannot be undone.")
+        if confirm != 1:
+            return False
+        try:
+            os.remove(path)
+        except OSError as exc:
+            print(f"\n{UI.RED}Delete failed: {exc}{UI.END}")
+            pause()
+            return False
+        print(f"\n{UI.GREEN}✓ Deleted {name}{UI.END}")
+        pause()
+        return True
+
+    return False
 
 
 def main_menu(config, directory):
@@ -862,20 +970,17 @@ def main_menu(config, directory):
         choice = interactive_menu("FFCLI", [
             "Process media in this folder",
             "Manage presets",
-            "Open the web cutter",
             "Show preset file location",
             "---",
             "Exit",
         ], subtitle=f"{directory} | {len(presets)} preset(s)")
-        if choice in (-1, 5):
+        if choice in (-1, 4):
             return 0
         if choice == 0:
             run_process_flow(presets, directory)
         elif choice == 1:
             manage_presets_flow(presets, config)
         elif choice == 2:
-            summon_web(directory)
-        elif choice == 3:
             show_preset_location(config)
 
 

@@ -1,8 +1,8 @@
 # ffcli - ffmpeg presets in your terminal, cutting in your browser
 
 `ffcli` runs **FFmpeg** presets or your own FFmpeg commands over as many files as
-you like, all from an interactive terminal menu. When you need to actually *see*
-where to cut, it opens a local web cutter with a waveform / timeline editor.
+you like, all from an interactive terminal menu. Each audio/video row also has a
+focused web cutter for trimming that one file.
 
 Pure Python standard library: no pip installs, no Flask, no Node.js. Runs on
 **Windows**, **Linux**, **macOS** and **Android (Termux)**.
@@ -16,12 +16,13 @@ Pure Python standard library: no pip installs, no Flask, no Node.js. Runs on
 - **Custom FFmpeg commands** - type the options after `-i`, or paste a whole
   `ffmpeg -i in.mp4 ... out.mp4` line and let `ffcli` pull the arguments and
   output extension out of it.
-- **Preset library** - add, edit and delete presets from the menu. The same
-  `ffmpeg_commands.json` feeds the terminal menu and the web UI.
-- **Web cutter on demand** - one menu entry starts a local dashboard with a video
-  timeline scrubber and an audio waveform studio (zoom, draggable In/Out handles,
-  fade in/out, stream-copy or frame-accurate export). See
-  [Web cutter](#-web-cutter) below.
+- **Preset library** - add, edit and delete presets from the menu.
+- **Per-file row actions** - `View`, `Rename`, `Cut`, `Delete` on audio and video,
+  `View`, `Rename`, `Delete` on images.
+- **Focused cutter** - `Cut` opens a local page that trims *only that file*: a
+  video timeline or an audio waveform, In/Out handles, and a `_output` file. No
+  file browser, no presets, no batch. It closes itself and hands the terminal
+  back when the cut is done. See [Web cutter](#-web-cutter).
 
 ---
 
@@ -68,9 +69,9 @@ Run `ffcli` with no arguments inside a media folder:
 | Key | Action |
 | :--- | :--- |
 | `↑` / `↓` | Move (separators are skipped) |
-| `→` | Focus the `View` button on the highlighted file |
-| `←` | Leave the `View` button |
-| `Enter` | Confirm, or open the file when `View` is focused |
+| `→` | Focus the next row action (`View` → `Rename` → `Cut` → `Delete`) |
+| `←` | Step back through the row actions |
+| `Enter` | Confirm, or run the focused row action |
 | `Esc` | Back - returns to the file list from any sub-menu |
 | `Space` | Toggle a file or a whole extension group |
 
@@ -81,9 +82,16 @@ The file picker starts with two control rows:
   `file group (.ext)`.
 
 Below them sit the `Select ALL .mp4` style toggles and the files themselves, each
-with its extension, name and size. Move onto a file, press `→` to select its
-`View` button, then `Enter` to open it in your default media player - handy for
-checking a take before converting it.
+with its extension, name and size. Move onto a file and the row shows its action
+buttons:
+
+```
+ ➜  [ ] [MP4]   clip.mp4 (45.1 KB)  [ View ] [ Rename ] [ Cut ] [ Delete ]
+```
+
+`View` opens the file in your default player, `Rename` asks for a new name,
+`Cut` opens the web cutter for that file and `Delete` removes it after a
+confirmation. Images get `View`, `Rename` and `Delete`.
 
 `Back` (or `Esc`) never throws away your work: from the preset menu, the
 post-process menu or the concurrency menu it returns to the file list with your
@@ -99,7 +107,6 @@ Everything is reachable from the one and only entry point, `ffcli`:
 | :--- | :--- |
 | Process media in this folder | Pick files, pick a preset or type an FFmpeg command |
 | Manage presets | List / add / edit / delete presets |
-| Open the web cutter | Starts the local dashboard for the current folder |
 | Show preset file location | Prints the absolute path of `ffmpeg_commands.json` |
 | Exit | Closes the tool |
 
@@ -137,22 +144,23 @@ Built-in presets:
 
 ## ✂️ Web cutter
 
-Choose **Open the web cutter** in the menu and `ffcli` starts the local dashboard
-and opens it in your browser, scoped to the folder you launched `ffcli` from.
-`Ctrl+C` in the terminal (or the Exit button in the page) stops it.
+Pick `Cut` on an audio or video row and `ffcli` starts `ffcli_web.py` for **that
+one file** and opens it in your browser:
 
-It is a separate feature, not a replacement for the terminal menu:
+- **Video** - preview player, a timeline with draggable In/Out handles, timecode
+  inputs, and three modes: *stream copy* (fast, keyframe aligned), *re-encode*
+  (frame accurate, H.264 CRF 19 + AAC) or *extract audio* (MP3 320k).
+- **Audio** - waveform canvas with draggable In/Out handles, fade in / fade out,
+  and export as copy, MP3 320k, WAV, FLAC or AAC 256k.
 
-- **Video cutter** - frame preview, scrubbing, dual-handle range selection,
-  timecode inputs, lossless stream-copy export or frame-accurate re-encode.
-- **Audio cutter / waveform studio** - zoomable waveform (1x-8x), draggable
-  In/Out handles and region window, fade in / fade out, export to MP3, WAV, AAC,
-  FLAC, M4A or stream copy.
-- **Batch tab** - preset conversion with live progress, speed and logs, plus
-  preview, rename and delete of the files in the current folder.
+The output is always `<name>_output.<ext>` next to the source. When the cut
+finishes the page reports it, tries to close its own tab and stops the server, so
+the terminal menu comes straight back with the new `_output` file in the list.
+`Ctrl+C` in the terminal aborts instead.
 
-The server binds to `127.0.0.1` only and shuts down with `Ctrl+C` in the terminal
-or the Exit button in the page.
+The page is deliberately single-purpose: it serves exactly the file you asked to
+cut, binds to `127.0.0.1`, and exposes no file browser, no presets and no batch
+conversion.
 
 ---
 
@@ -162,27 +170,16 @@ or the Exit button in the page.
 ffcli/
 ├── ffcli.py               # entry point: the interactive terminal menu
 ├── ffcore.py              # shared core: media detection, presets, ffmpeg runner
-├── ffcli_web.py           # web cutter feature (local HTTP server)
-├── ffmpeg_commands.json   # preset library, shared by the menu and the web UI
+├── ffcli_web.py           # single-file cutter server (one file, trim only)
+├── ffmpeg_commands.json   # preset library
 ├── ffcli.bat              # Windows launcher
 ├── ffcli                  # Linux / macOS / Termux launcher
 ├── README.md
-└── web/                   # web cutter front-end (loaded natively, no build step)
+└── web/                   # cutter page (plain HTML/CSS/JS, no build step)
     ├── index.html
-    ├── style.css
+    ├── style.css          # dark stone theme
     └── js/
-        ├── main.js
-        ├── core/utils.js
-        └── features/
-            ├── explorer.js   # media explorer, selection, folder switching
-            ├── presets.js    # preset library editor
-            ├── batch.js      # batch conversion, progress and logs
-            ├── preview.js    # media preview lightbox
-            ├── tabs.js       # tab navigation and cutter file pickers
-            └── cutters/
-                ├── video.js  # video cutter controller
-                ├── audio.js  # audio cutter / waveform studio
-                └── trim.js   # trim execution and status polling
+        └── app.js         # timeline + waveform, cut request, status polling
 ```
 
 ---

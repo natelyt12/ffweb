@@ -291,12 +291,16 @@ def build_command(input_path, output_path, args):
 
 def run_ffmpeg(input_path, output_path, args, on_progress=None, on_log=None):
     """Run one ffmpeg job. Returns (exit_code, error_text, seconds)."""
+    argv = build_command(input_path, output_path, args)
+    return run_ffmpeg_argv(argv, output_path, probe_duration(input_path), on_progress, on_log)
+
+
+def run_ffmpeg_argv(argv, output_path, duration=0.0, on_progress=None, on_log=None):
+    """Run a ready-made ffmpeg argv. Returns (exit_code, error_text, seconds)."""
     if not tool_path("ffmpeg"):
         return 127, "ffmpeg was not found in PATH", 0.0
 
-    duration = probe_duration(input_path)
     existed_before = os.path.exists(output_path)
-    argv = build_command(input_path, output_path, args)
 
     creationflags = 0
     if os.name == "nt":
@@ -339,6 +343,7 @@ def run_ffmpeg(input_path, output_path, args, on_progress=None, on_log=None):
                     continue
                 on_progress(min(99.9, seconds / duration * 100.0), None)
             elif key == "speed":
+                value = value.strip()
                 on_progress(None, None if value in ("N/A", "") else value)
     finally:
         code = proc.wait()

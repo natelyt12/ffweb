@@ -1,12 +1,21 @@
-# ffcli_web.py - Web cutter feature of ffcli (standalone local server)
-# Zero external dependencies (Python standard library only)
+#!/usr/bin/env python3
+"""ffcli_web.py - the single-file cutter page opened by ffcli's Cut action.
+
+Usage:
+    python ffcli_web.py <media file> [port]
+
+Exactly one file is served and only trimming is exposed: no file list, no
+presets, no batch. The process exits as soon as the cut finishes (or the page
+asks it to stop) so the terminal UI gets its prompt back and can show the
+`_output` file.
+"""
+from __future__ import annotations
+
 import json
 import mimetypes
 import os
-import queue
 import re
-import shlex
-import socketserver
+import struct
 import subprocess
 import sys
 import threading
@@ -14,1012 +23,343 @@ import time
 import urllib.parse
 import webbrowser
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PORT = 8765
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-WEB_DIR = os.path.join(SCRIPT_DIR, "web")
-PRESETS_FILE = os.path.join(SCRIPT_DIR, "ffmpeg_commands.json")
-current_working_dir = os.getcwd()
+import ffcore
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+WEB_DIR = os.path.join(HERE, "web")
+DEFAULT_PORT = 8765
 
-# --- Media Helpers ---
-class Media:
-    VIDEO = {'.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp', '.ts'}
-    AUDIO = {'.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.opus', '.wma', '.mka'}
-    IMAGE = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.svg', '.heic', '.heif'}
-    ALL = VIDEO | AUDIO | IMAGE
-
-    @staticmethod
-    def get_size_str(filepath):
-        try:
-            size_bytes = os.path.getsize(filepath)
-            if size_bytes < 1024:
-                return f"{size_bytes} B"
-            elif size_bytes < 1024 * 1024:
-                return f"{size_bytes / 1024:.1f} KB"
-            elif size_bytes < 1024 * 1024 * 1024:
-                return f"{size_bytes / (1024 * 1024):.1f} MB"
-            else:
-                return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
-        except Exception:
-            return "N/A"
-
-
-# --- Preset Helpers ---
-def normalize_commands(raw):
-    commands = {}
-    if not isinstance(raw, dict):
-        return commands
-    for name, data in raw.items():
-        if isinstance(data, str):
-            commands[name] = {"cmd": data, "ext": ".mp4"}
-        elif isinstance(data, dict) and "cmd" in data:
-            ext = str(data.get("ext") or ".mp4")
-            if not ext.startswith('.'):
-                ext = '.' + ext
-            commands[name] = {"cmd": str(data["cmd"]), "ext": ext}
-    return commands
-
-
-def load_commands():
-    if not os.path.exists(PRESETS_FILE):
-        return {}
-    try:
-        with open(PRESETS_FILE, "r", encoding='utf-8') as f:
-            return normalize_commands(json.load(f))
-    except Exception:
-        return {}
-
-
-def save_commands(commands):
-    try:
-        with open(PRESETS_FILE, "w", encoding='utf-8') as f:
-            json.dump(commands, f, indent=4, ensure_ascii=False)
-        return True
-    except Exception:
-        return False
-
-
-# Global job state
-job_lock = threading.Lock()
-current_job = {
-    "status": "idle",       # idle | running | completed | cancelled
-    "total_files": 0,
-    "completed_count": 0,
-    "concurrency": 1,
-    "file_order": [],
-    "files": {},
-    "created_outputs": [],  # absolute paths of all created/in-progress output files
-    "cancel_requested": False,
-}
-active_subprocesses = {}
-
-def get_media_duration(file_path):
-    """Uses ffprobe to obtain media duration in seconds for progress calculation."""
-    try:
-        cmd = [
-            'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-            '-of', 'default=noprint_wrappers=1:nokey=1', file_path
-        ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=5)
-        return float(res.stdout.strip())
-    except Exception:
-        return 0.0
-
-def run_conversion_task(files, cmd_template, output_ext, delete_after, concurrency=1):
-    global current_job, active_subprocesses, current_working_dir
-    with job_lock:
-        current_job["status"] = "running"
-        current_job["total_files"] = len(files)
-        current_job["completed_count"] = 0
-        current_job["concurrency"] = concurrency
-        current_job["file_order"] = list(files)
-        current_job["files"] = {}
-        current_job["created_outputs"] = []
-        current_job["cancel_requested"] = False
-
-        for f in files:
-            filename, old_ext = os.path.splitext(f)
-            cur_out_ext = output_ext if output_ext else old_ext
-            if cur_out_ext and not cur_out_ext.startswith('.'):
-                cur_out_ext = '.' + cur_out_ext
-            out_name = f"{filename}_output{cur_out_ext}"
-            current_job["files"][f] = {
-                "status": "pending",
-                "progress": 0.0,
-                "speed": "--",
-                "fps": "--",
-                "output": out_name,
-                "msg": "",
-                "cmd": "",
-                "log": ""
-            }
-        active_subprocesses.clear()
-
-    task_queue = queue.Queue()
-    for f in files:
-        task_queue.put(f)
-
-    def worker_loop():
-        while True:
-            try:
-                input_file = task_queue.get_nowait()
-            except queue.Empty:
-                break
-
-            with job_lock:
-                if current_job["cancel_requested"]:
-                    task_queue.task_done()
-                    break
-                current_job["files"][input_file]["status"] = "running"
-                current_job["files"][input_file]["progress"] = 0.0
-                out_name = current_job["files"][input_file]["output"]
-                output_abs_path = os.path.join(current_working_dir, out_name)
-                if output_abs_path not in current_job["created_outputs"]:
-                    current_job["created_outputs"].append(output_abs_path)
-
-            input_abs_path = os.path.join(current_working_dir, input_file)
-            total_duration = get_media_duration(input_abs_path)
-
-            cmd_args = ['ffmpeg', '-y', '-i', input_abs_path]
-            try:
-                extra_args = shlex.split(cmd_template)
-                cmd_args.extend(extra_args)
-            except Exception:
-                cmd_args.extend(cmd_template.split())
-            cmd_args.extend(['-progress', 'pipe:1', output_abs_path])
-
-            full_cmd_str = ' '.join(cmd_args)
-            with job_lock:
-                current_job["files"][input_file]["cmd"] = full_cmd_str
-
-            print(f"\n[FFmpeg Task Started] {input_file}\nCommand: {full_cmd_str}")
-
-            creationflags = 0
-            if os.name == 'nt':
-                creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
-
-            proc = None
-            was_cancelled = False
-            stderr_lines = []
-            try:
-                proc = subprocess.Popen(
-                    cmd_args,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    cwd=current_working_dir,
-                    universal_newlines=True,
-                    creationflags=creationflags
-                )
-                with job_lock:
-                    active_subprocesses[input_file] = proc
-
-                def read_stderr():
-                    try:
-                        for s_line in proc.stderr:
-                            s_line = s_line.rstrip()
-                            if s_line:
-                                stderr_lines.append(s_line)
-                                print(f"[{input_file}] {s_line}")
-                                if len(stderr_lines) > 200:
-                                    stderr_lines.pop(0)
-                    except Exception:
-                        pass
-
-                t_err = threading.Thread(target=read_stderr, daemon=True)
-                t_err.start()
-
-                for line in proc.stdout:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if '=' in line:
-                        k, v = line.split('=', 1)
-                        k = k.strip()
-                        v = v.strip()
-                        with job_lock:
-                            if current_job["cancel_requested"] or current_job["files"][input_file]["status"] == "cancelled":
-                                break
-                            if k == 'out_time_ms':
-                                try:
-                                    cur_sec = float(v) / 1000000.0
-                                    if total_duration > 0:
-                                        pct = min(99.0, (cur_sec / total_duration) * 100.0)
-                                        current_job["files"][input_file]["progress"] = round(pct, 1)
-                                except Exception:
-                                    pass
-                            elif k == 'speed':
-                                current_job["files"][input_file]["speed"] = v
-                            elif k == 'fps':
-                                current_job["files"][input_file]["fps"] = v
-
-                proc.wait()
-                t_err.join(timeout=1.0)
-            except Exception as e:
-                stderr_lines.append(str(e))
-            finally:
-                with job_lock:
-                    if input_file in active_subprocesses:
-                        del active_subprocesses[input_file]
-                    was_cancelled = (current_job["cancel_requested"] or current_job["files"][input_file]["status"] == "cancelled")
-
-            with job_lock:
-                current_job["files"][input_file]["log"] = "\n".join(stderr_lines)
-
-                if was_cancelled:
-                    current_job["files"][input_file]["status"] = "cancelled"
-                    try:
-                        if os.path.exists(output_abs_path):
-                            os.remove(output_abs_path)
-                    except Exception:
-                        pass
-                    if not current_job["cancel_requested"]:
-                        if output_abs_path in current_job["created_outputs"]:
-                            current_job["created_outputs"].remove(output_abs_path)
-                    task_queue.task_done()
-                    if current_job["cancel_requested"]:
-                        break
-                    continue
-
-                success = (proc is not None and proc.returncode == 0)
-                if success:
-                    current_job["files"][input_file]["status"] = "done"
-                    current_job["files"][input_file]["progress"] = 100.0
-                    current_job["files"][input_file]["msg"] = "Success"
-                    if delete_after:
-                        try:
-                            os.remove(input_abs_path)
-                        except Exception:
-                            pass
-                else:
-                    err_msg = ""
-                    for s_l in reversed(stderr_lines):
-                        if any(w in s_l.lower() for w in ["error", "invalid", "does not contain", "could not", "failed", "unsupported"]):
-                            err_msg = s_l
-                            break
-                    if not err_msg and stderr_lines:
-                        err_msg = stderr_lines[-1]
-                    if not err_msg:
-                        err_msg = f"FFmpeg exited with code {proc.returncode if proc else 'failed'}"
-
-                    current_job["files"][input_file]["status"] = "error"
-                    current_job["files"][input_file]["msg"] = err_msg
-
-                current_job["completed_count"] += 1
-                task_queue.task_done()
-
-    threads = []
-    worker_count = max(1, min(concurrency, len(files), 4))
-    for _ in range(worker_count):
-        t = threading.Thread(target=worker_loop, daemon=True)
-        t.start()
-        threads.append(t)
-
-    for t in threads:
-        t.join()
-
-    with job_lock:
-        if current_job["cancel_requested"]:
-            current_job["status"] = "cancelled"
-            for f_name, f_info in current_job["files"].items():
-                if f_info["status"] in ("pending", "running"):
-                    f_info["status"] = "cancelled"
-        else:
-            current_job["status"] = "completed"
-
-
-# Global Trim state
-trim_lock = threading.Lock()
-current_trim_job = {
-    "status": "idle",       # idle | running | done | error | cancelled
-    "file": "",
-    "output": "",
+STATE_LOCK = threading.Lock()
+STATE = {
+    "status": "idle",      # idle | running | done | error | cancelled
     "progress": 0.0,
-    "speed": "--",
-    "fps": "--",
-    "msg": "",
-    "cmd": "",
-    "log": ""
+    "speed": "",
+    "output": "",
+    "message": "",
 }
-active_trim_proc = None
-waveform_cache = {}
 
-def get_audio_waveform(filepath, target_points=1200):
-    if filepath in waveform_cache:
-        return waveform_cache[filepath]
+TARGET = ""
+TARGET_TYPE = "video"
+TARGET_EXT = ""
+TARGET_STEM = ""
+WAVEFORM = None
 
-    duration = get_media_duration(filepath)
-    if duration <= 0:
-        return {"success": False, "peaks": [], "duration": 0, "has_audio": False}
 
-    cmd = [
-        'ffmpeg', '-v', 'error', '-i', filepath,
-        '-vn', '-ac', '1', '-ar', '1000',
-        '-f', 's16le', '-'
-    ]
-    creationflags = 0
-    if os.name == 'nt':
-        creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+# --- helpers ---------------------------------------------------------------
 
+def media_type(path):
+    return "audio" if ffcore.Media.kind(path) == "audio" else "video"
+
+
+def output_name(ext):
+    return f"{TARGET_STEM}_output{ext}"
+
+
+def build_cut_argv(payload):
+    """Translate the page payload into a complete ffmpeg argv."""
     try:
-        import struct
-        res = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=25,
-            creationflags=creationflags
-        )
-        raw = res.stdout
-        if not raw:
-            res_data = {"success": True, "peaks": [], "duration": duration, "has_audio": False}
-            waveform_cache[filepath] = res_data
-            return res_data
+        start = max(0.0, float(payload.get("start", 0) or 0))
+        end = float(payload.get("end", 0) or 0)
+        fade_in = max(0.0, float(payload.get("fade_in", 0) or 0))
+        fade_out = max(0.0, float(payload.get("fade_out", 0) or 0))
+    except (TypeError, ValueError):
+        raise ValueError("start/end/fade values must be numbers")
+    if end <= start:
+        raise ValueError("the out point must be after the in point")
 
-        sample_count = len(raw) // 2
-        if sample_count == 0:
-            res_data = {"success": True, "peaks": [], "duration": duration, "has_audio": False}
-            waveform_cache[filepath] = res_data
-            return res_data
+    span = end - start
+    mode = str(payload.get("mode") or "copy")
+    fmt = str(payload.get("format") or "mp3")
+    seek = ["-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", TARGET]
+    out_ext = TARGET_EXT
 
-        samples = struct.unpack(f'<{sample_count}h', raw[:sample_count * 2])
-        chunk_size = max(1, sample_count // target_points)
-        peaks = []
-        for i in range(0, sample_count, chunk_size):
-            chunk = samples[i:i + chunk_size]
-            if chunk:
-                val = max(abs(s) for s in chunk) / 32768.0
-                peaks.append(round(val, 3))
-
-        max_val = max(peaks) if peaks else 0
-        if max_val > 0.01:
-            peaks = [round(min(1.0, p / max_val), 3) for p in peaks]
-
-        res_data = {"success": True, "peaks": peaks, "duration": round(duration, 3), "has_audio": True}
-        waveform_cache[filepath] = res_data
-        return res_data
-    except Exception as e:
-        return {"success": False, "peaks": [], "duration": duration, "has_audio": False, "error": str(e)}
-
-def run_trim_task(file_name, output_name, start_sec, end_sec, mode="copy", media_type="video",
-                  audio_format="copy", fade_in=0.0, fade_out=0.0):
-    global current_trim_job, active_trim_proc, current_working_dir
-
-    input_abs = os.path.abspath(os.path.join(current_working_dir, file_name))
-    output_abs = os.path.abspath(os.path.join(current_working_dir, output_name))
-    duration = max(0.001, end_sec - start_sec)
-
-    with trim_lock:
-        current_trim_job["status"] = "running"
-        current_trim_job["file"] = file_name
-        current_trim_job["output"] = output_name
-        current_trim_job["progress"] = 0.0
-        current_trim_job["speed"] = "--"
-        current_trim_job["fps"] = "--"
-        current_trim_job["msg"] = ""
-        current_trim_job["cmd"] = ""
-        current_trim_job["log"] = ""
-
-    start_str = f"{max(0.0, start_sec):.3f}"
-    end_str = f"{end_sec:.3f}"
-
-    cmd_args = ['ffmpeg', '-y']
-
-    if media_type == "video":
-        if mode == "copy":
-            cmd_args.extend([
-                '-ss', start_str,
-                '-to', end_str,
-                '-i', input_abs,
-                '-c', 'copy',
-                '-avoid_negative_ts', 'make_zero',
-                '-map', '0'
-            ])
-        elif mode == "audio_only":
-            cmd_args.extend([
-                '-ss', start_str,
-                '-to', end_str,
-                '-i', input_abs,
-                '-vn',
-                '-c:a', 'libmp3lame',
-                '-b:a', '320k'
-            ])
-        else: # encode
-            cmd_args.extend([
-                '-ss', start_str,
-                '-to', end_str,
-                '-i', input_abs,
-                '-c:v', 'libx264',
-                '-crf', '19',
-                '-preset', 'fast',
-                '-pix_fmt', 'yuv420p',
-                '-c:a', 'aac',
-                '-b:a', '192k',
-                '-movflags', '+faststart'
-            ])
-    else: # audio
-        audio_filters = []
-        if fade_in > 0:
-            audio_filters.append(f"afade=t=in:ss=0:d={fade_in:.2f}")
-        if fade_out > 0:
-            st = max(0.0, duration - fade_out)
-            audio_filters.append(f"afade=t=out:st={st:.2f}:d={fade_out:.2f}")
-
-        has_filters = len(audio_filters) > 0
-
-        cmd_args.extend(['-ss', start_str, '-to', end_str, '-i', input_abs])
-
-        if has_filters:
-            cmd_args.extend(['-af', ','.join(audio_filters)])
-
-        if not has_filters and (mode == "copy" or audio_format == "copy"):
-            cmd_args.extend(['-c', 'copy'])
+    if TARGET_TYPE == "video":
+        if mode == "audio_only":
+            args = seek + ["-vn", "-c:a", "libmp3lame", "-b:a", "320k"]
+            out_ext = ".mp3"
+        elif mode == "encode":
+            args = seek + [
+                "-c:v", "libx264", "-crf", "19", "-preset", "fast", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+            ]
+            out_ext = ".mp4"
         else:
-            fmt = audio_format.lower()
-            if fmt == 'mp3':
-                cmd_args.extend(['-c:a', 'libmp3lame', '-b:a', '320k'])
-            elif fmt == 'aac':
-                cmd_args.extend(['-c:a', 'aac', '-b:a', '256k'])
-            elif fmt == 'wav':
-                cmd_args.extend(['-c:a', 'pcm_s16le'])
-            elif fmt == 'flac':
-                cmd_args.extend(['-c:a', 'flac'])
-            elif fmt == 'm4a':
-                cmd_args.extend(['-c:a', 'aac', '-b:a', '256k'])
-            else:
-                cmd_args.extend(['-c:a', 'libmp3lame', '-b:a', '320k'])
+            args = seek + ["-c", "copy", "-avoid_negative_ts", "make_zero", "-map", "0"]
+            out_ext = TARGET_EXT
+    else:
+        filters = []
+        if fade_in > 0:
+            filters.append(f"afade=t=in:ss=0:d={fade_in:.2f}")
+        if fade_out > 0:
+            filters.append(f"afade=t=out:st={max(0.0, span - fade_out):.2f}:d={fade_out:.2f}")
+        args = list(seek)
+        if filters:
+            args += ["-af", ",".join(filters)]
+        if fmt == "copy" and not filters:
+            args += ["-c", "copy"]
+            out_ext = TARGET_EXT
+        else:
+            codec, out_ext = {
+                "mp3": (["-c:a", "libmp3lame", "-b:a", "320k"], ".mp3"),
+                "wav": (["-c:a", "pcm_s16le"], ".wav"),
+                "flac": (["-c:a", "flac"], ".flac"),
+                "aac": (["-c:a", "aac", "-b:a", "256k"], ".m4a"),
+            }.get(fmt, (["-c:a", "libmp3lame", "-b:a", "320k"], ".mp3"))
+            args += codec
 
-    cmd_args.extend(['-progress', 'pipe:1', output_abs])
+    name = output_name(out_ext)
+    argv = [
+        ffcore.tool_path("ffmpeg") or "ffmpeg",
+        "-hide_banner", "-nostdin", "-y", *args,
+        "-progress", "pipe:1", "-nostats", "-loglevel", "error",
+        os.path.join(os.path.dirname(TARGET), name),
+    ]
+    return argv, name, span
 
-    full_cmd_str = ' '.join(cmd_args)
-    with trim_lock:
-        current_trim_job["cmd"] = full_cmd_str
 
-    print(f"\n[FFmpeg Trim Started] {file_name} -> {output_name}\nCommand: {full_cmd_str}")
+def waveform_data():
+    """Cached peak list for the audio pane."""
+    global WAVEFORM
+    if WAVEFORM is not None:
+        return WAVEFORM
 
-    creationflags = 0
-    if os.name == 'nt':
-        creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+    duration = ffcore.probe_duration(TARGET)
+    empty = {"success": True, "peaks": [], "duration": duration, "has_audio": False}
+    if duration <= 0:
+        WAVEFORM = empty
+        return WAVEFORM
 
-    proc = None
-    stderr_lines = []
+    argv = [
+        ffcore.tool_path("ffmpeg") or "ffmpeg",
+        "-v", "error", "-i", TARGET,
+        "-vn", "-ac", "1", "-ar", "1000", "-f", "s16le", "-",
+    ]
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0
     try:
-        proc = subprocess.Popen(
-            cmd_args,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=current_working_dir,
-            universal_newlines=True,
-            creationflags=creationflags
-        )
-        active_trim_proc = proc
+        raw = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             timeout=40, creationflags=flags).stdout
+    except (OSError, subprocess.SubprocessError):
+        WAVEFORM = empty
+        return WAVEFORM
 
-        def read_stderr():
-            try:
-                for s_line in proc.stderr:
-                    s_line = s_line.rstrip()
-                    if s_line:
-                        stderr_lines.append(s_line)
-                        if len(stderr_lines) > 200:
-                            stderr_lines.pop(0)
-            except Exception:
-                pass
+    samples = len(raw) // 2
+    if samples == 0:
+        WAVEFORM = empty
+        return WAVEFORM
 
-        t_err = threading.Thread(target=read_stderr, daemon=True)
-        t_err.start()
+    values = struct.unpack(f"<{samples}h", raw[:samples * 2])
+    points = 1600
+    chunk = max(1, samples // points)
+    peaks = []
+    for i in range(0, samples, chunk):
+        piece = values[i:i + chunk]
+        if piece:
+            peaks.append(round(max(abs(v) for v in piece) / 32768.0, 3))
+    loudest = max(peaks) if peaks else 0.0
+    if loudest > 0.01:
+        peaks = [round(min(1.0, p / loudest), 3) for p in peaks]
 
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            if '=' in line:
-                k, v = line.split('=', 1)
-                k = k.strip()
-                v = v.strip()
-                with trim_lock:
-                    if current_trim_job["status"] == "cancelled":
-                        break
-                    if k == 'out_time_ms':
-                        try:
-                            cur_sec = float(v) / 1000000.0
-                            if duration > 0:
-                                pct = min(99.0, (cur_sec / duration) * 100.0)
-                                current_trim_job["progress"] = round(pct, 1)
-                        except Exception:
-                            pass
-                    elif k == 'speed':
-                        current_trim_job["speed"] = v
-                    elif k == 'fps':
-                        current_trim_job["fps"] = v
+    WAVEFORM = {"success": True, "peaks": peaks, "duration": round(duration, 3), "has_audio": True}
+    return WAVEFORM
 
-        proc.wait()
-        t_err.join(timeout=1.0)
-    except Exception as e:
-        stderr_lines.append(str(e))
-    finally:
-        active_trim_proc = None
 
-    with trim_lock:
-        current_trim_job["log"] = "\n".join(stderr_lines)
-        if current_trim_job["status"] == "cancelled":
-            try:
-                if os.path.exists(output_abs):
-                    os.remove(output_abs)
-            except Exception:
-                pass
+def shutdown_later(delay):
+    """Exit the process so the terminal UI regains control.
+
+    Each call starts its own timer: whichever fires first wins, so an explicit
+    `/api/finish` is not blocked by the post-cut safety timeout.
+    """
+    def stop():
+        time.sleep(delay)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
+
+    threading.Thread(target=stop, daemon=True).start()
+
+
+def start_cut(payload):
+    with STATE_LOCK:
+        if STATE["status"] == "running":
+            return False, "a cut is already running"
+        STATE.update(status="running", progress=0.0, speed="", output="", message="")
+
+    def work():
+        try:
+            argv, name, span = build_cut_argv(payload)
+        except ValueError as exc:
+            with STATE_LOCK:
+                STATE.update(status="error", message=str(exc))
             return
 
-        if proc is not None and proc.returncode == 0:
-            current_trim_job["status"] = "done"
-            current_trim_job["progress"] = 100.0
-            current_trim_job["msg"] = "Success"
-        else:
-            err_msg = ""
-            for s_l in reversed(stderr_lines):
-                if any(w in s_l.lower() for w in ["error", "invalid", "does not contain", "could not", "failed", "unsupported"]):
-                    err_msg = s_l
-                    break
-            if not err_msg and stderr_lines:
-                err_msg = stderr_lines[-1]
-            if not err_msg:
-                err_msg = f"FFmpeg exited with code {proc.returncode if proc else 'failed'}"
+        with STATE_LOCK:
+            STATE["output"] = name
 
-            current_trim_job["status"] = "error"
-            current_trim_job["msg"] = err_msg
+        def on_progress(pct, speed):
+            with STATE_LOCK:
+                if pct is not None:
+                    STATE["progress"] = pct
+                if speed:
+                    STATE["speed"] = speed
+
+        code, error, elapsed = ffcore.run_ffmpeg_argv(
+            argv, argv[-1], span, on_progress=on_progress)
+
+        with STATE_LOCK:
+            if code == 0:
+                STATE.update(status="done", progress=100.0, message=f"{name} ({elapsed:.1f}s)")
+            elif STATE["status"] == "cancelled":
+                STATE.update(message="cancelled")
+            else:
+                detail = ""
+                if error:
+                    detail = next((ln for ln in reversed(error.splitlines()) if ln.strip()), "")
+                STATE.update(status="error", message=detail or "ffmpeg failed")
+            finished = STATE["status"] == "done"
+
+        if finished:
+            shutdown_later(10.0)  # safety net if the page never reports back
+
+    threading.Thread(target=work, daemon=True).start()
+    return True, ""
 
 
-class DashboardHandler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args):
+# --- HTTP ------------------------------------------------------------------
+
+class CutterHandler(BaseHTTPRequestHandler):
+    server_version = "ffcli-cutter"
+
+    def log_message(self, fmt, *args):
         pass
 
-    def send_json(self, data, status=200):
-        content = json.dumps(data, ensure_ascii=False).encode('utf-8')
+    def send_json(self, payload, status=HTTPStatus.OK):
+        body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(content)
+        self.wfile.write(body)
 
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+    def send_bytes(self, body, content_type):
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
+        self.wfile.write(body)
 
     def do_GET(self):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-        query = urllib.parse.parse_qs(parsed.query)
-
-        if path == "/api/files":
-            files_data = []
-            try:
-                for f in sorted(os.listdir(current_working_dir)):
-                    full_p = os.path.join(current_working_dir, f)
-                    if os.path.isfile(full_p):
-                        ext = os.path.splitext(f)[1].lower()
-                        if ext in Media.ALL:
-                            size_str = Media.get_size_str(full_p)
-                            mtype = "file"
-                            if ext in Media.VIDEO:
-                                mtype = "video"
-                            elif ext in Media.AUDIO:
-                                mtype = "audio"
-                            elif ext in Media.IMAGE:
-                                mtype = "image"
-
-                            files_data.append({
-                                "name": f,
-                                "ext": ext,
-                                "type": mtype,
-                                "size": size_str,
-                                "bytes": os.path.getsize(full_p)
-                            })
-            except Exception:
-                pass
-
-            self.send_json({
-                "cwd": current_working_dir,
-                "files": files_data,
-                "count": len(files_data)
+        path = urllib.parse.urlparse(self.path).path
+        if path in ("/", "/index.html"):
+            return self.serve_static("index.html")
+        if path == "/api/info":
+            return self.send_json({
+                "name": os.path.basename(TARGET),
+                "type": TARGET_TYPE,
+                "ext": TARGET_EXT,
+                "duration": ffcore.probe_duration(TARGET),
+                "output": output_name(TARGET_EXT),
             })
-            return
-
-        if path == "/api/presets":
-            commands = load_commands()
-            self.send_json({"presets": commands})
-            return
-
-        if path == "/api/status":
-            with job_lock:
-                self.send_json(current_job)
-            return
-
         if path == "/api/waveform":
-            filename = query.get("file", [""])[0]
-            if not filename:
-                self.send_json({"success": False, "error": "Missing file parameter"}, status=400)
-                return
-            filepath = os.path.abspath(os.path.join(current_working_dir, filename))
-            if not os.path.isfile(filepath):
-                self.send_json({"success": False, "error": "File not found"}, status=404)
-                return
-            data = get_audio_waveform(filepath)
-            self.send_json(data)
-            return
+            return self.send_json(waveform_data())
+        if path == "/api/status":
+            with STATE_LOCK:
+                return self.send_json(dict(STATE))
+        if path == "/api/media":
+            return self.stream_file(TARGET)
+        return self.serve_static(path.lstrip("/"))
 
-        if path == "/api/trim-status":
-            with trim_lock:
-                self.send_json(current_trim_job)
-            return
-
-        if path == "/api/preview":
-            filename = query.get("file", [""])[0]
-            if not filename:
-                self.send_error(400, "Missing file parameter")
-                return
-
-            filepath = os.path.abspath(os.path.join(current_working_dir, filename))
-            if not os.path.isfile(filepath):
-                self.send_error(404, "File not found")
-                return
-
-            self.stream_file_range(filepath)
-            return
-
-        req_file = path.lstrip('/')
-        if not req_file or req_file == '/':
-            req_file = "index.html"
-
-        target_path = os.path.join(WEB_DIR, req_file)
-        if not os.path.isfile(target_path):
-            target_path = os.path.join(WEB_DIR, "index.html")
-
-        mime_type, _ = mimetypes.guess_type(target_path)
-        if not mime_type:
-            mime_type = "text/html"
-
+    def do_POST(self):
+        path = urllib.parse.urlparse(self.path).path
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(length).decode("utf-8") if length else "{}"
         try:
-            with open(target_path, "rb") as f:
-                content = f.read()
-            self.send_response(200)
-            self.send_header("Content-Type", f"{mime_type}; charset=utf-8")
-            self.send_header("Content-Length", str(len(content)))
-            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.end_headers()
-            self.wfile.write(content)
-        except Exception:
-            self.send_error(404, "File not found")
+            body = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            body = {}
 
-    def stream_file_range(self, filepath):
+        if path == "/api/cut":
+            ok, error = start_cut(body)
+            return self.send_json({"success": ok, "error": error},
+                                  HTTPStatus.OK if ok else HTTPStatus.CONFLICT)
+        if path == "/api/cancel":
+            with STATE_LOCK:
+                if STATE["status"] == "running":
+                    STATE.update(status="cancelled", message="cancelled")
+            ffcore.cancel_all()
+            return self.send_json({"success": True})
+        if path in ("/api/finish", "/api/quit"):
+            self.send_json({"success": True})
+            return shutdown_later(0.4)
+        self.send_error(HTTPStatus.NOT_FOUND)
+
+    def serve_static(self, relative):
+        safe = os.path.normpath(relative).replace("\\", "/")
+        if safe.startswith("..") or os.path.isabs(safe):
+            return self.send_error(HTTPStatus.FORBIDDEN)
+        full = os.path.join(WEB_DIR, safe)
+        if not os.path.isfile(full):
+            return self.send_error(HTTPStatus.NOT_FOUND)
+        ctype, _ = mimetypes.guess_type(full)
+        with open(full, "rb") as fh:
+            self.send_bytes(fh.read(), ctype or "application/octet-stream")
+
+    def stream_file(self, filepath):
         try:
-            file_size = os.path.getsize(filepath)
-            mime_type, _ = mimetypes.guess_type(filepath)
-            if not mime_type:
-                mime_type = "application/octet-stream"
-
-            range_header = self.headers.get("Range")
-            if not range_header:
-                self.send_response(200)
-                self.send_header("Content-Type", mime_type)
-                self.send_header("Content-Length", str(file_size))
+            size = os.path.getsize(filepath)
+            ctype = mimetypes.guess_type(filepath)[0] or "application/octet-stream"
+            match = re.match(r"bytes=(\d+)-(\d*)", self.headers.get("Range", ""))
+            if not match:
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(size))
                 self.send_header("Accept-Ranges", "bytes")
                 self.end_headers()
-                with open(filepath, "rb") as f:
-                    while chunk := f.read(65536):
-                        self.wfile.write(chunk)
-                return
-
-            match = re.match(r"bytes=(\d+)-(\d*)", range_header)
-            if not match:
-                self.send_error(416, "Requested Range Not Satisfiable")
+                with open(filepath, "rb") as fh:
+                    while True:
+                        block = fh.read(65536)
+                        if not block:
+                            break
+                        self.wfile.write(block)
                 return
 
             start = int(match.group(1))
-            end = int(match.group(2)) if match.group(2) else file_size - 1
-            if start >= file_size or end >= file_size:
-                self.send_error(416, "Requested Range Not Satisfiable")
-                return
-
+            end = int(match.group(2)) if match.group(2) else size - 1
+            if start >= size or end >= size:
+                return self.send_error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
             length = end - start + 1
-            self.send_response(206)
-            self.send_header("Content-Type", mime_type)
-            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+            self.send_response(HTTPStatus.PARTIAL_CONTENT)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
             self.send_header("Content-Length", str(length))
             self.send_header("Accept-Ranges", "bytes")
             self.end_headers()
-
-            with open(filepath, "rb") as f:
-                f.seek(start)
+            with open(filepath, "rb") as fh:
+                fh.seek(start)
                 remaining = length
                 while remaining > 0:
-                    read_size = min(65536, remaining)
-                    chunk = f.read(read_size)
-                    if not chunk:
+                    block = fh.read(min(65536, remaining))
+                    if not block:
                         break
-                    self.wfile.write(chunk)
-                    remaining -= len(chunk)
+                    self.wfile.write(block)
+                    remaining -= len(block)
         except (ConnectionResetError, BrokenPipeError):
             pass
-        except Exception as e:
-            self.send_error(500, str(e))
-
-    def do_POST(self):
-        global current_working_dir
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-
-        length = int(self.headers.get("Content-Length", 0))
-        post_data = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
-        try:
-            body = json.loads(post_data)
-        except Exception:
-            body = {}
-
-        if path == "/api/presets":
-            action = body.get("action")
-            name = body.get("name", "").strip()
-            commands = load_commands()
-
-            if action == "save":
-                cmd = body.get("cmd", "").strip()
-                ext = body.get("ext", ".mp4").strip()
-                if not ext.startswith('.'):
-                    ext = '.' + ext
-                if name and cmd:
-                    commands[name] = {"cmd": cmd, "ext": ext}
-                    save_commands(commands)
-                    self.send_json({"success": True, "presets": commands})
-                    return
-                self.send_json({"success": False, "error": "Name and command options are required."}, status=400)
-                return
-
-            elif action == "delete":
-                if name in commands:
-                    del commands[name]
-                    save_commands(commands)
-                    self.send_json({"success": True, "presets": commands})
-                    return
-                self.send_json({"success": False, "error": "Preset not found."}, status=404)
-                return
-
-        if path == "/api/process":
-            files = body.get("files", [])
-            cmd_template = body.get("cmd", "").strip()
-            output_ext = body.get("ext", "").strip()
-            delete_after = bool(body.get("delete_after", False))
-            concurrency = int(body.get("concurrency", 1))
-            concurrency = max(1, min(4, concurrency))
-
-            if not files:
-                self.send_json({"success": False, "error": "No files selected."}, status=400)
-                return
-
-            with job_lock:
-                if current_job["status"] == "running":
-                    self.send_json({"success": False, "error": "A job is already running."}, status=409)
-                    return
-
-            thread = threading.Thread(
-                target=run_conversion_task,
-                args=(files, cmd_template, output_ext, delete_after, concurrency),
-                daemon=True
-            )
-            thread.start()
-            self.send_json({"success": True, "message": f"Started processing {len(files)} files with {concurrency} workers."})
-            return
-
-        if path == "/api/cancel-task":
-            target_file = body.get("file", "").strip()
-            proc = None
-            with job_lock:
-                if target_file in current_job["files"]:
-                    current_job["files"][target_file]["status"] = "cancelled"
-                proc = active_subprocesses.get(target_file)
-            if proc:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-            self.send_json({"success": True, "message": f"Cancelled task {target_file}"})
-            return
-
-        if path == "/api/cancel":
-            with job_lock:
-                current_job["cancel_requested"] = True
-                current_job["status"] = "cancelled"
-                for f_name, f_info in current_job["files"].items():
-                    if f_info["status"] in ("pending", "running"):
-                        f_info["status"] = "cancelled"
-            for proc in list(active_subprocesses.values()):
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-            with job_lock:
-                active_subprocesses.clear()
-                # Rollback: Delete all generated output files from this batch run
-                for out_path in list(current_job["created_outputs"]):
-                    try:
-                        if os.path.exists(out_path):
-                            os.remove(out_path)
-                    except Exception:
-                        pass
-                current_job["created_outputs"].clear()
-            self.send_json({"success": True, "message": "All batch tasks cancelled and generated outputs deleted."})
-            return
-
-        if path == "/api/trim":
-            file_name = body.get("file", "").strip()
-            output_name = body.get("output_name", "").strip()
-            start_sec = float(body.get("start", 0.0))
-            end_sec = float(body.get("end", 0.0))
-            mode = body.get("mode", "copy").strip()
-            media_type = body.get("type", "video").strip()
-            audio_format = body.get("format", "copy").strip()
-            fade_in = float(body.get("fade_in", 0.0))
-            fade_out = float(body.get("fade_out", 0.0))
-
-            if not file_name or os.path.sep in file_name or '/' in file_name:
-                self.send_json({"success": False, "error": "Invalid input file."}, status=400)
-                return
-            if not output_name or os.path.sep in output_name or '/' in output_name:
-                self.send_json({"success": False, "error": "Invalid output file name."}, status=400)
-                return
-            input_abs = os.path.join(current_working_dir, file_name)
-            if not os.path.isfile(input_abs):
-                self.send_json({"success": False, "error": "File not found."}, status=404)
-                return
-            if end_sec <= start_sec:
-                self.send_json({"success": False, "error": "End time must be greater than start time."}, status=400)
-                return
-
-            with trim_lock:
-                if current_trim_job["status"] == "running":
-                    self.send_json({"success": False, "error": "A trim job is already running."}, status=409)
-                    return
-
-            threading.Thread(
-                target=run_trim_task,
-                args=(file_name, output_name, start_sec, end_sec, mode, media_type, audio_format, fade_in, fade_out),
-                daemon=True
-            ).start()
-            self.send_json({"success": True, "message": "Trim process started."})
-            return
-
-        if path == "/api/cancel-trim":
-            with trim_lock:
-                current_trim_job["status"] = "cancelled"
-            if active_trim_proc:
-                try:
-                    active_trim_proc.kill()
-                except Exception:
-                    pass
-            self.send_json({"success": True, "message": "Trim cancelled."})
-            return
-
-        if path == "/api/rename":
-            old_name = body.get("old_name", "").strip()
-            new_name = body.get("new_name", "").strip()
-            if not old_name or not new_name:
-                self.send_json({"success": False, "error": "Old and new file names are required."}, status=400)
-                return
-            if os.path.sep in old_name or '/' in old_name or os.path.sep in new_name or '/' in new_name:
-                self.send_json({"success": False, "error": "Invalid file name."}, status=400)
-                return
-            old_abs = os.path.abspath(os.path.join(current_working_dir, old_name))
-            new_abs = os.path.abspath(os.path.join(current_working_dir, new_name))
-            if not os.path.isfile(old_abs):
-                self.send_json({"success": False, "error": f"File '{old_name}' not found."}, status=404)
-                return
-            if os.path.exists(new_abs):
-                self.send_json({"success": False, "error": f"File '{new_name}' already exists."}, status=409)
-                return
-            try:
-                os.rename(old_abs, new_abs)
-                self.send_json({"success": True, "old_name": old_name, "new_name": new_name})
-            except Exception as e:
-                self.send_json({"success": False, "error": str(e)}, status=500)
-            return
-
-        if path == "/api/delete":
-            name = body.get("name", "").strip()
-            if not name or os.path.sep in name or '/' in name:
-                self.send_json({"success": False, "error": "Invalid file name."}, status=400)
-                return
-            target_abs = os.path.abspath(os.path.join(current_working_dir, name))
-            if not os.path.isfile(target_abs):
-                self.send_json({"success": False, "error": f"File '{name}' not found."}, status=404)
-                return
-            try:
-                os.remove(target_abs)
-                self.send_json({"success": True, "name": name})
-            except Exception as e:
-                self.send_json({"success": False, "error": str(e)}, status=500)
-            return
-
-        if path == "/api/select-folder":
-            selected = None
-            try:
-                import tkinter as tk
-                from tkinter import filedialog
-                root = tk.Tk()
-                root.withdraw()
-                root.attributes("-topmost", True)
-                selected = filedialog.askdirectory(
-                    initialdir=current_working_dir,
-                    title="Select Folder containing Media"
-                )
-                root.destroy()
-            except Exception:
-                selected = None
-
-            if selected and os.path.isdir(selected):
-                current_working_dir = os.path.abspath(selected)
-                self.send_json({"success": True, "cwd": current_working_dir})
-            else:
-                self.send_json({
-                    "success": False,
-                    "unsupported": (not selected and not os.environ.get("DISPLAY") and os.name != 'nt'),
-                    "cancelled": True,
-                    "cwd": current_working_dir
-                })
-            return
-
-        if path == "/api/change-folder":
-            new_folder = body.get("folder", "").strip()
-            if new_folder and os.path.isdir(new_folder):
-                current_working_dir = os.path.abspath(new_folder)
-                self.send_json({"success": True, "cwd": current_working_dir})
-            else:
-                self.send_json({"success": False, "error": f"Directory not found: {new_folder}"}, status=400)
-            return
-
-        if path == "/api/open-folder":
-            folder = body.get("folder") or current_working_dir
-            try:
-                if os.name == 'nt':
-                    os.startfile(folder)
-                elif sys.platform == 'darwin':
-                    subprocess.Popen(['open', folder])
-                else:
-                    import shutil
-                    if shutil.which('termux-open'):
-                        subprocess.Popen(['termux-open', folder])
-                    elif shutil.which('xdg-open'):
-                        subprocess.Popen(['xdg-open', folder])
-                self.send_json({"success": True})
-            except Exception as e:
-                self.send_json({"success": False, "error": str(e)})
-            return
-
-        if path == "/api/shutdown":
-            self.send_json({"success": True, "message": "Server shutting down."})
-            threading.Thread(target=self.server.shutdown, daemon=True).start()
-            return
-
-        self.send_error(404, "Endpoint not found")
-
-
-class ReusableThreadingServer(socketserver.ThreadingTCPServer):
-    allow_reuse_address = (os.name != 'nt')
-    daemon_threads = True
+        except OSError as exc:
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
 
 def open_browser(url):
-    """Opens browser across Windows, macOS, Linux, and Android (Termux)."""
     try:
         import shutil
-        if shutil.which("termux-open-url"):
-            subprocess.Popen(["termux-open-url", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return
-        elif shutil.which("termux-open"):
-            subprocess.Popen(["termux-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return
-    except Exception:
+        for opener in ("termux-open-url", "termux-open"):
+            if shutil.which(opener):
+                subprocess.Popen([opener, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+    except OSError:
         pass
     try:
         webbrowser.open(url)
@@ -1027,87 +367,49 @@ def open_browser(url):
         pass
 
 
-def try_connect_and_switch(port, target_dir):
-    """If another ffcli web instance is already running on this port, switch its active folder and exit."""
-    try:
-        import urllib.request
-        data = json.dumps({"folder": target_dir}).encode("utf-8")
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/change-folder",
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
-            if resp.status == 200:
-                res_body = json.loads(resp.read().decode("utf-8"))
-                if res_body.get("success"):
-                    print("\n" + "=" * 45)
-                    print("           ffmpeg on the web")
-                    print("=" * 45)
-                    print(f" -> Connected to existing server at: http://127.0.0.1:{port}")
-                    print(f" -> Switched active folder to:       {target_dir}")
-                    print(f" -> Opening browser dashboard...\n")
-                    open_browser(f"http://127.0.0.1:{port}")
-                    return True
-    except Exception:
-        pass
-    return False
+def main():
+    global TARGET, TARGET_TYPE, TARGET_EXT, TARGET_STEM
 
+    port = DEFAULT_PORT
+    candidate = ""
+    for arg in sys.argv[1:]:
+        if arg.isdigit():
+            port = int(arg)
+        elif os.path.isfile(arg):
+            candidate = os.path.abspath(arg)
 
-def start_server(port=PORT, auto_open=True, initial_dir=None):
-    global current_working_dir
-    if initial_dir and os.path.isdir(initial_dir):
-        current_working_dir = os.path.abspath(initial_dir)
-    else:
-        current_working_dir = os.path.abspath(os.getcwd())
+    if not candidate:
+        print("usage: ffcli_web.py <media file> [port]", file=sys.stderr)
+        return 2
+    if not ffcore.tool_path("ffmpeg"):
+        print("[ffcli] ffmpeg was not found in PATH", file=sys.stderr)
+        return 1
 
-    os.makedirs(WEB_DIR, exist_ok=True)
-    server_address = ("127.0.0.1", port)
+    TARGET = candidate
+    TARGET_EXT = os.path.splitext(candidate)[1].lower()
+    TARGET_STEM = os.path.splitext(os.path.basename(candidate))[0]
+    TARGET_TYPE = media_type(candidate)
 
     try:
-        httpd = ReusableThreadingServer(server_address, DashboardHandler)
-    except OSError as e:
-        print(f"\n[Error] Could not bind to port {port}: {e}")
-        print("Another process is using this port. You can specify a different port: ffcli web --port <n>\n")
-        return
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), CutterHandler)
+    except OSError as exc:
+        print(f"[ffcli] cannot bind port {port}: {exc}", file=sys.stderr)
+        return 1
+    httpd.daemon_threads = True
 
-    url = f"http://127.0.0.1:{port}"
-    
-    print("\n" + "=" * 45)
-    print("           ffmpeg on the web")
-    print("=" * 45)
-    print(f" -> Local Dashboard:   {url}")
-    print(f" -> Active Directory:  {current_working_dir}")
-    print(f" -> Press Ctrl+C or click 'Exit' in browser to stop.\n")
+    url = f"http://127.0.0.1:{port}/"
+    print(f"\n[ffcli] cutting {os.path.basename(TARGET)}")
+    print(f"[ffcli] {url}   (Ctrl+C here to abort)")
 
-    if auto_open:
-        threading.Timer(0.3, lambda: open_browser(url)).start()
-
+    threading.Timer(0.3, lambda: open_browser(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopping server...")
-        httpd.shutdown()
+        pass
+    finally:
         httpd.server_close()
+    return 0
 
 
 if __name__ == "__main__":
-    p = PORT
-    initial_d = None
-    for arg in sys.argv[1:]:
-        if arg.isdigit():
-            p = int(arg)
-        elif os.path.isdir(arg):
-            initial_d = os.path.abspath(arg)
-
-    target_d = initial_d or os.path.abspath(os.getcwd())
-
-    # If an instance is already running on this port, connect and switch its directory
-    if try_connect_and_switch(p, target_d):
-        sys.exit(0)
-
-    start_server(port=p, auto_open=True, initial_dir=target_d)
-
-
-
+    sys.exit(main())
