@@ -1,143 +1,223 @@
-# ffweb - ffmpeg on the web
+# ffcli - ffmpeg presets in your terminal, cutting in your browser
 
-A modern, lightweight web dashboard for processing media with **FFmpeg** right from your browser. Built with **0 external pip dependencies** using pure Python standard library.
+`ffcli` runs **FFmpeg** presets or your own FFmpeg commands over as many files as
+you like - from an interactive terminal menu or from a plain command line. When
+you need to actually *see* where to cut, it opens a local web cutter with a
+waveform / timeline editor.
 
-Runs seamlessly on **Windows**, **Linux**, **macOS**, and **Android (Termux)**.
+Pure Python standard library: no pip installs, no Flask, no Node.js. Runs on
+**Windows**, **Linux**, **macOS** and **Android (Termux)**.
 
 ---
 
-## 💡 What You Can Do with ffweb
+## 💡 What it does
 
-- **Batch convert media in seconds**: Select multiple videos, audios, or images from your folder, pick an optimized preset, and convert them in one go. Run conversions sequentially or with up to **4 parallel workers** to speed things up.
-- **Dedicated Video Cutter**: Live video preview with real-time frame scrubbing, dual-handle range selection, timecode inputs (`hh:mm:ss.ms`), keyframe / stream copy lossless fast-export, frame-accurate re-encoding, and audio waveform displayed directly beneath the timeline.
-- **Dedicated Audio Cutter & Waveform Studio**: High-resolution interactive audio waveform canvas with zoom levels (1x-8x), draggable In/Out boundary handles, draggable cut region window, audio playback, Fade In / Fade Out effects, and multi-format export (MP3, WAV, AAC, FLAC, M4A, Stream Copy).
-- **Preview media right in your browser**: Watch videos, listen to music tracks, or check images with smooth seeking before converting—no external players needed.
-- **Rename or delete files on the spot**: Rename files or clean up unwanted originals directly from the web interface without switching back and forth to File Explorer.
-- **Watch real-time speed & inspect full logs**: Monitor live progress percentage, encoding speed multiplier (e.g. `2.8x`), and FPS. Click any task to inspect the exact FFmpeg command and live terminal logs, with a one-click `Copied!` button.
-- **Cancel safely without leaving broken files**: Skip an individual file or cancel the whole batch with a single click—any unfinished output files are automatically cleaned up immediately.
-- **Create and manage custom presets**: Choose from built-in recipes (universal playback, maximum compression, audio extraction) or save your own custom FFmpeg commands in the Presets tab.
-- **Launch from anywhere with zero setup**: Click the address bar of any folder in Windows Explorer (or terminal), type `ffweb`, and the dashboard opens automatically at that folder. No Flask, Node.js, or pip installs needed.
+- **Preset conversions in bulk** - pick files in a terminal menu, choose a preset
+  (or write your own FFmpeg options), and run 1-4 conversions in parallel.
+- **Scriptable** - `ffcli run *.mp4 -p "preset"` works in pipelines, cron jobs
+  and batch files, with progress, exit codes and `--dry-run`.
+- **Custom FFmpeg commands** - type the options after `-i`, or paste a whole
+  `ffmpeg -i in.mp4 ... out.mp4` line and let `ffcli` pull the arguments and
+  output extension out of it.
+- **Preset library** - add, edit, delete, import and export presets. The same
+  `ffmpeg_commands.json` feeds the CLI and the web UI.
+- **Web cutter on demand** - `ffcli cut` starts a local dashboard with a video
+  timeline scrubber and an audio waveform studio (zoom, draggable In/Out handles,
+  fade in/out, stream-copy or frame-accurate export). See
+  [Web cutter](#-web-cutter) below.
 
 ---
 
 ## 📋 Prerequisites
 
-1. **Python 3.8+** installed and available in your `PATH`.
-2. **FFmpeg & FFprobe** installed and available in your `PATH`.
+1. **Python 3.8+** available in your `PATH`.
+2. **FFmpeg & FFprobe** available in your `PATH`.
+
+`ffcli doctor` tells you what is missing.
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick start
 
 ### 🖥️ Windows
 
-Open a terminal or click the address bar in any folder in **Windows Explorer**, type `ffweb`, and press Enter:
-
 ```cmd
-ffweb
+ffcli                                  :: interactive menu for the current folder
+ffcli run movie.mkv -p "Max Compression (H.265 HEVC)"
 ```
 
-Or pass a media folder path directly:
-
-```cmd
-ffweb "D:\Videos\Movies"
-```
-
----
+Add the folder containing `ffcli.bat` to your `PATH` to run it from anywhere -
+including the address bar of Windows Explorer.
 
 ### 🐧 Linux & 🍎 macOS
 
-Make the script executable (first time only) and run:
-
 ```bash
-chmod +x ffweb
-./ffweb
-# or specify a folder:
-./ffweb /path/to/media
+chmod +x ffcli
+./ffcli
+./ffcli run *.mp4 -p "Extract MP3 Audio (VBR High Quality)"
 ```
-
----
 
 ### 📱 Android (Termux)
 
-You can run `ffweb` directly on your Android device:
-
-1. Install **Termux** (from F-Droid) and grant storage permission:
-   ```bash
-   termux-setup-storage
-   ```
-2. Install Python and FFmpeg:
-   ```bash
-   pkg update && pkg install python ffmpeg -y
-   ```
-3. Navigate to the project folder and launch:
-   ```bash
-   python ffweb.py ~/storage/shared/DCIM
-   ```
-   *(Or `./ffweb`). The web dashboard will automatically open in your mobile browser via `termux-open-url`!*
-
----
-
-## 🛠️ Adding to System PATH (Run from Anywhere)
-
-### Windows
-1. Press `Win + S` and search for **Environment Variables**.
-2. Click **Edit the system environment variables** $\rightarrow$ **Environment Variables**.
-3. Under **User variables**, select `Path` and click **Edit**.
-4. Click **New** and paste the folder path containing `ffweb.bat`.
-5. Click **OK**. Now you can type `ffweb` in any terminal or Windows Explorer address bar!
-
-### Linux / macOS / Termux
-Add an alias to your `~/.bashrc` or `~/.zshrc`:
-
 ```bash
-echo "alias ffweb='python3 $(pwd)/ffweb.py'" >> ~/.bashrc
-source ~/.bashrc
+pkg update && pkg install python ffmpeg -y
+cd ~/storage/shared/DCIM && python ffcli.py              # interactive menu
+python ffcli.py -C ~/storage/shared/DCIM run *.mp4 -p "Extract MP3 Audio (VBR High Quality)"
+python ffcli.py cut ~/storage/shared/DCIM                # web cutter in your browser
 ```
 
 ---
 
-## ⚙️ Built-in Presets
+## ⌨️ Interactive mode
 
-| Preset | FFmpeg Arguments | Output | Best For |
-| :--- | :--- | :---: | :--- |
-| **Universal Video** | `-c:v libx264 -crf 18 -preset slow -pix_fmt yuv420p -profile:v high -level 4.1 -movflags +faststart -c:a aac -b:a 256k` | `.mp4` | 100% playback compatibility across all devices, TVs, and web browsers with visually lossless quality. |
-| **Max Compression** | `-c:v libx265 -crf 24 -preset medium -tag:v hvc1 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 128k` | `.mp4` | H.265 HEVC compression saving 50% to 75% file size while preserving high visual fidelity. |
-| **Extract MP3 (320kbps Best Quality)** | `-vn -c:a libmp3lame -b:a 320k` | `.mp3` | Highest quality 320kbps CBR MP3 extraction from video/audio files. |
-| **Extract MP3 (VBR High Quality)** | `-vn -c:a libmp3lame -q:a 2` | `.mp3` | High quality variable bitrate (~190-250kbps) MP3 with optimal file size. |
+Run `ffcli` with no arguments inside a media folder:
 
-You can add your own custom presets anytime in the **Presets Manager** tab.
+| Key | Action |
+| :--- | :--- |
+| `↑` / `↓` | Move |
+| `Enter` | Confirm |
+| `Esc` | Back |
+| `Space` | Toggle a file (multi-select) |
+| Typing a letter/digit | Jump to the matching entry |
+
+The file picker offers `Select ALL .mp4` style toggles, shows size and type per
+file, and supports a search filter. After picking files you choose a preset or a
+custom command, whether to delete the originals, and how many FFmpeg processes to
+run at once.
 
 ---
 
-## 📂 Project Structure
+## 🧰 Command line
+
+```text
+ffcli [--config FILE] [-C DIR] <command> ...
+```
+
+| Command | Purpose |
+| :--- | :--- |
+| `ffcli` | Interactive menu for the current folder |
+| `ffcli run <inputs...>` | Convert files with `--preset` or `--cmd` |
+| `ffcli presets list\|show\|add\|set\|rm\|import\|export` | Manage the preset library |
+| `ffcli cut [path]` (alias `web`) | Start the web cutter in your browser |
+| `ffcli doctor` | Check Python, FFmpeg, FFprobe and the preset file |
+
+Useful `run` options: `-p/--preset`, `-c/--cmd`, `-e/--ext`, `-o/--out`,
+`-j/--jobs`, `--delete`, `--skip-existing`, `--dry-run`, `-q/--quiet`.
+Inputs may be files, glob patterns (`*.mp4`) or folders.
+
+```bash
+# preset over a whole folder
+ffcli run clips/ -p "Universal Video (Max Compatibility & Quality)"
+
+# four files at a time, delete the sources when they succeed
+ffcli run *.mkv -p "Max Compression (H.265 HEVC)" -j 4 --delete
+
+# custom options, exact output name, see the command without running it
+ffcli run talk.mp4 -c "-vn -c:a libmp3lame -b:a 192k" -o talk.mp3 --dry-run
+```
+
+### ⚠️ Passing FFmpeg options
+
+FFmpeg options start with `-`, so anything after `--` is treated as FFmpeg
+arguments verbatim:
+
+```bash
+ffcli run *.mp4 -- -c:v libx264 -crf 23 -c:a aac
+```
+
+If your shell mangles `-c:v` (PowerShell treats the colon specially), quote the
+option, or use the `--cmd="..."` form:
+
+```powershell
+ffcli run *.mp4 -- "-c:v" libx264 -crf 23 "-c:a" aac
+ffcli run *.mp4 -e .mp4 --cmd="-c:v libx264 -crf 23 -c:a aac"
+```
+
+---
+
+## ⚙️ Presets
+
+Presets live in `ffmpeg_commands.json` next to `ffcli.py`. Override the location
+with `--config PATH` or the `FFCLI_CONFIG` environment variable; the file is
+created on first use, seeded from the built-in defaults.
+
+```json
+{
+    "Extract MP3 Audio (VBR High Quality)": {
+        "cmd": "-vn -c:a libmp3lame -q:a 2",
+        "ext": ".mp3"
+    }
+}
+```
+
+`cmd` holds the options that come **after** `-i input`, `ext` is the output
+extension. The legacy `{"name": "options string"}` form is still read.
+
+Built-in presets:
+
+| Preset | Output | Best for |
+| :--- | :---: | :--- |
+| Universal Video (Max Compatibility & Quality) | `.mp4` | H.264 CRF 18 + AAC 256k, `+faststart`; plays everywhere. |
+| Max Compression (H.265 HEVC) | `.mp4` | HEVC CRF 24; roughly half the size at similar quality. |
+| Extract MP3 Audio (320kbps Best Quality) | `.mp3` | Highest quality CBR MP3 from video or audio. |
+| Extract MP3 Audio (VBR High Quality) | `.mp3` | Variable bitrate MP3 (~190-250kbps), smaller files. |
+| Image compress | `.jpg` | Re-encode images at JPEG quality 5. |
+
+---
+
+## ✂️ Web cutter
+
+`ffcli cut` (or `ffcli web`) starts the local dashboard and opens it in your
+browser, scoped to a folder:
+
+```bash
+ffcli cut                      # current folder
+ffcli cut "D:\Videos\Movies"   # a specific folder
+ffcli cut movie.mp4 --port 8800
+```
+
+It is a separate feature, not a replacement for the CLI:
+
+- **Video cutter** - frame preview, scrubbing, dual-handle range selection,
+  timecode inputs, lossless stream-copy export or frame-accurate re-encode.
+- **Audio cutter / waveform studio** - zoomable waveform (1x-8x), draggable
+  In/Out handles and region window, fade in / fade out, export to MP3, WAV, AAC,
+  FLAC, M4A or stream copy.
+- **Batch tab** - preset conversion with live progress, speed and logs, plus
+  preview, rename and delete of the files in the current folder.
+
+The server binds to `127.0.0.1` only and shuts down with `Ctrl+C` in the terminal
+or the Exit button in the page.
+
+---
+
+## 📂 Project structure
 
 ```text
 ffcli/
-├── ffweb.py               # Main Python server (pure standard library)
-├── ffmpeg_commands.json   # Presets database
-├── ffweb.bat              # Windows batch launcher
-├── ffweb                  # Linux / macOS / Termux bash launcher
-├── .gitignore             # Standard repository ignore rules
-├── .gitattributes         # Enforce LF endings on shell scripts
-├── README.md              # Documentation
-└── web/
-    ├── index.html         # Frontend HTML structure
-    ├── style.css          # Styling & dark pastel theme
-    └── js/                # ES modules (loaded natively, no build step)
-        ├── main.js        # Bootstrap: global handler binding, listeners, init
-        ├── core/
-        │   └── utils.js   # Shared helpers (icons, escaping, timecodes)
+├── ffcli.py               # CLI entry point: interactive menu + subcommands
+├── ffcore.py              # shared core: media detection, presets, ffmpeg runner
+├── ffcli_web.py           # web cutter feature (local HTTP server)
+├── ffmpeg_commands.json   # preset library, shared by the CLI and the web UI
+├── ffcli.bat              # Windows launcher
+├── ffcli                  # Linux / macOS / Termux launcher
+├── README.md
+└── web/                   # web cutter front-end (loaded natively, no build step)
+    ├── index.html
+    ├── style.css
+    └── js/
+        ├── main.js
+        ├── core/utils.js
         └── features/
-            ├── explorer.js   # Media explorer, selection & folder switching
-            ├── presets.js    # Preset library & editor modal
-            ├── batch.js      # Batch conversion, live progress & log modal
-            ├── preview.js    # Media preview lightbox
-            ├── tabs.js       # Tab navigation & cutter file pickers
+            ├── explorer.js   # media explorer, selection, folder switching
+            ├── presets.js    # preset library editor
+            ├── batch.js      # batch conversion, progress and logs
+            ├── preview.js    # media preview lightbox
+            ├── tabs.js       # tab navigation and cutter file pickers
             └── cutters/
-                ├── video.js  # Video cutter controller
-                ├── audio.js  # Audio cutter / waveform studio
-                └── trim.js   # Trim execution & status polling
+                ├── video.js  # video cutter controller
+                ├── audio.js  # audio cutter / waveform studio
+                └── trim.js   # trim execution and status polling
 ```
 
 ---

@@ -1,4 +1,4 @@
-# ffweb.py - Standalone local server for ffmpeg on the web
+# ffcli_web.py - Web cutter feature of ffcli (standalone local server)
 # Zero external dependencies (Python standard library only)
 import json
 import mimetypes
@@ -1028,7 +1028,7 @@ def open_browser(url):
 
 
 def try_connect_and_switch(port, target_dir):
-    """If another ffweb instance is already running on this port, switch its active folder and exit."""
+    """If another ffcli web instance is already running on this port, switch its active folder and exit."""
     try:
         import urllib.request
         data = json.dumps({"folder": target_dir}).encode("utf-8")
@@ -1069,7 +1069,7 @@ def start_server(port=PORT, auto_open=True, initial_dir=None):
         httpd = ReusableThreadingServer(server_address, DashboardHandler)
     except OSError as e:
         print(f"\n[Error] Could not bind to port {port}: {e}")
-        print("Another process is using this port. You can specify a different port: ffweb <port>\n")
+        print("Another process is using this port. You can specify a different port: ffcli web --port <n>\n")
         return
 
     url = f"http://127.0.0.1:{port}"

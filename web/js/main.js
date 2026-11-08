@@ -14,7 +14,7 @@ import * as trim from './features/cutters/trim.js';
 
 /** Stops the local server and replaces the page with a farewell screen. */
 export async function shutdownServer() {
-  if (!confirm("Stop the local FFWEB server?")) return;
+  if (!confirm("Stop the local ffcli web server?")) return;
   try {
     await fetch('/api/shutdown', { method: 'POST' });
     document.body.innerHTML = `

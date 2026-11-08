@@ -372,7 +372,7 @@ export function initExplorer() {
     }
   });
 
-  // Background sync: follow the directory if `ffweb` was launched from another Explorer folder
+  // Background sync: follow the directory if `ffcli web` was launched from another Explorer folder
   setInterval(async () => {
     if (document.visibilityState !== 'visible') return;
     if (pollInterval) return; // Don't interrupt batch progress polling
