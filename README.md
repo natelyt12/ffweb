@@ -19,7 +19,7 @@ Pure Python standard library: no pip installs, no Flask, no Node.js. Runs on
 - **Preset library** - add, edit and delete presets from the menu.
 - **Per-file row actions** - `View`, `Rename`, `Cut`, `Delete` on audio and video,
   `View`, `Rename`, `Delete` on images.
-- **Focused cutter** - `Cut` opens a local page that trims *only that file*: a
+- **Focused cutter** - `Cut` opens a local page that trims _only that file_: a
   video timeline or an audio waveform, In/Out handles, and a `_output` file. No
   file browser, no presets, no batch. It closes itself and hands the terminal
   back when the cut is done. See [Web cutter](#-web-cutter).
@@ -53,27 +53,20 @@ chmod +x ffcli
 ./ffcli
 ```
 
-### 📱 Android (Termux)
-
-```bash
-pkg update && pkg install python ffmpeg -y
-cd ~/storage/shared/DCIM && python ffcli.py
-```
-
 ---
 
 ## ⌨️ Interactive mode
 
 Run `ffcli` with no arguments inside a media folder:
 
-| Key | Action |
-| :--- | :--- |
-| `↑` / `↓` | Move (separators are skipped) |
-| `→` | Focus the next row action (`View` → `Rename` → `Cut` → `Delete`) |
-| `←` | Step back through the row actions |
-| `Enter` | Confirm, or run the focused row action |
-| `Esc` | Back - returns to the file list from any sub-menu |
-| `Space` | Toggle a file or a whole extension group |
+| Key       | Action                                                           |
+| :-------- | :--------------------------------------------------------------- |
+| `↑` / `↓` | Move (separators are skipped)                                    |
+| `→`       | Focus the next row action (`View` → `Rename` → `Cut` → `Delete`) |
+| `←`       | Step back through the row actions                                |
+| `Enter`   | Confirm, or run the focused row action                           |
+| `Esc`     | Back - returns to the file list from any sub-menu                |
+| `Space`   | Toggle a file or a whole extension group                         |
 
 The file picker starts with two control rows:
 
@@ -104,12 +97,12 @@ selection still checked - and the row you were on stays focused, even after a
 
 Everything is reachable from the one and only entry point, `ffcli`:
 
-| Entry | What happens |
-| :--- | :--- |
+| Entry                        | What happens                                        |
+| :--------------------------- | :-------------------------------------------------- |
 | Process media in this folder | Pick files, pick a preset or type an FFmpeg command |
-| Manage presets | List / add / edit / delete presets |
-| Show preset file location | Prints the absolute path of `ffmpeg_commands.json` |
-| Exit | Closes the tool |
+| Manage presets               | List / add / edit / delete presets                  |
+| Show preset file location    | Prints the absolute path of `ffmpeg_commands.json`  |
+| Exit                         | Closes the tool                                     |
 
 ---
 
@@ -122,10 +115,10 @@ defaults.
 
 ```json
 {
-    "Extract MP3 Audio (320kbps Best Quality)": {
-        "cmd": "-vn -c:a libmp3lame -b:a 320k",
-        "ext": ".mp3"
-    }
+  "Extract MP3 Audio (320kbps Best Quality)": {
+    "cmd": "-vn -c:a libmp3lame -b:a 320k",
+    "ext": ".mp3"
+  }
 }
 ```
 
@@ -134,12 +127,12 @@ extension. The legacy `{"name": "options string"}` form is still read.
 
 Built-in presets:
 
-| Preset | Output | Best for |
-| :--- | :---: | :--- |
+| Preset                                        | Output | Best for                                                 |
+| :-------------------------------------------- | :----: | :------------------------------------------------------- |
 | Universal Video (Max Compatibility & Quality) | `.mp4` | H.264 CRF 18 + AAC 256k, `+faststart`; plays everywhere. |
-| Max Compression (H.265 HEVC) | `.mp4` | HEVC CRF 24; roughly half the size at similar quality. |
-| Extract MP3 Audio (320kbps Best Quality) | `.mp3` | Highest quality CBR MP3 from video or audio. |
-| Image compress | `.jpg` | Re-encode images at JPEG quality 5. |
+| Max Compression (H.265 HEVC)                  | `.mp4` | HEVC CRF 24; roughly half the size at similar quality.   |
+| Extract MP3 Audio (320kbps Best Quality)      | `.mp3` | Highest quality CBR MP3 from video or audio.             |
+| Image compress                                | `.jpg` | Re-encode images at JPEG quality 5.                      |
 
 ---
 
@@ -150,8 +143,8 @@ one file** and opens it in your browser:
 
 - **Video** - preview player, a timeline with the audio waveform behind it, a
   seek playhead that follows playback, draggable In/Out handles, timecode inputs,
-  and three modes: *stream copy* (fast, keyframe aligned), *re-encode* (frame
-  accurate, H.264 CRF 19 + AAC) or *extract audio* (MP3 320k).
+  and three modes: _stream copy_ (fast, keyframe aligned), _re-encode_ (frame
+  accurate, H.264 CRF 19 + AAC) or _extract audio_ (MP3 320k).
 - **Audio** - waveform canvas with the same seek playhead and In/Out handles,
   fade in / fade out, and export as copy, MP3 320k, WAV, FLAC or AAC 256k.
 
