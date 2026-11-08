@@ -148,14 +148,15 @@ Built-in presets:
 Pick `Cut` on an audio or video row and `ffcli` starts `ffcli_web.py` for **that
 one file** and opens it in your browser:
 
-- **Video** - preview player, a timeline with the audio waveform behind it and
-  draggable In/Out handles, timecode inputs, and three modes: *stream copy*
-  (fast, keyframe aligned), *re-encode* (frame accurate, H.264 CRF 19 + AAC) or
-  *extract audio* (MP3 320k).
-- **Audio** - waveform canvas with draggable In/Out handles, fade in / fade out,
-  and export as copy, MP3 320k, WAV, FLAC or AAC 256k.
+- **Video** - preview player, a timeline with the audio waveform behind it, a
+  seek playhead that follows playback, draggable In/Out handles, timecode inputs,
+  and three modes: *stream copy* (fast, keyframe aligned), *re-encode* (frame
+  accurate, H.264 CRF 19 + AAC) or *extract audio* (MP3 320k).
+- **Audio** - waveform canvas with the same seek playhead and In/Out handles,
+  fade in / fade out, and export as copy, MP3 320k, WAV, FLAC or AAC 256k.
 
 Only the player that matches the file is shown, and `Space` plays or pauses it.
+Click anywhere on the timeline to jump, or drag the playhead to scrub.
 
 The output is always `<name>_output.<ext>` next to the source. When the cut
 finishes the page reports it, tries to close its own tab and stops the server, so

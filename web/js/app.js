@@ -126,6 +126,22 @@ function moveCursor() {
   ui.cursor.style.left = `${percent(current)}%`;
 }
 
+let cursorLoop = 0;
+
+function followPlayback() {
+  if (!state.dragging) moveCursor();
+  const media = player();
+  if (!media.paused && !media.ended) {
+    cursorLoop = requestAnimationFrame(followPlayback);
+  } else {
+    cursorLoop = 0;
+  }
+}
+
+function startFollow() {
+  if (!cursorLoop) cursorLoop = requestAnimationFrame(followPlayback);
+}
+
 function seek(seconds) {
   if (!state.duration) return;
   const target = Math.min(state.duration, Math.max(0, seconds));
@@ -382,9 +398,16 @@ ui.quitBtn.addEventListener("click", async () => {
   window.close();
 });
 
-player().addEventListener("timeupdate", () => {
-  if (!state.dragging) moveCursor();
-});
+for (const media of [ui.videoPlayer, ui.audioPlayer]) {
+  media.addEventListener("timeupdate", () => {
+    if (!state.dragging) moveCursor();
+  });
+  media.addEventListener("seeked", () => {
+    if (!state.dragging) moveCursor();
+  });
+  media.addEventListener("play", startFollow);
+  media.addEventListener("playing", startFollow);
+}
 
 window.addEventListener("resize", () => {
   drawWaveform();
@@ -446,6 +469,7 @@ async function boot() {
 
   renderTimeline();
   updateOutputName();
+  drawWaveform();
   requestAnimationFrame(drawWaveform);
   ui.cutBtn.disabled = !(state.duration > 0);
   if (!state.duration) setStatus("Could not read the duration of this file", true);
