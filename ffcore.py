@@ -39,10 +39,6 @@ DEFAULT_PRESETS = {
         "cmd": "-vn -c:a libmp3lame -b:a 320k",
         "ext": ".mp3",
     },
-    "Extract MP3 Audio (VBR High Quality)": {
-        "cmd": "-vn -c:a libmp3lame -q:a 2",
-        "ext": ".mp3",
-    },
     "Compress Image (JPEG q5)": {"cmd": "-q:v 5", "ext": ".jpg"},
     "Remux to MKV (No Encode)": {"cmd": "-c copy", "ext": ".mkv"},
 }
@@ -337,23 +333,3 @@ def run_ffmpeg(input_path, output_path, args, on_progress=None, on_log=None):
         with contextlib.suppress(OSError):
             os.remove(output_path)
     return code, "\n".join(errors[-8:]), elapsed
-
-
-def check_tools():
-    """(ok, report lines) describing the ffmpeg/ffprobe install."""
-    lines = []
-    ok = True
-    for name in ("ffmpeg", "ffprobe"):
-        path = tool_path(name)
-        if not path:
-            ok = False
-            lines.append((name, "", "NOT FOUND in PATH"))
-            continue
-        try:
-            head = subprocess.run([path, "-version"], stdout=subprocess.PIPE,
-                                  stderr=subprocess.STDOUT, timeout=10)
-            version = head.stdout.decode("utf-8", "replace").splitlines()[0].strip()
-        except (OSError, IndexError, subprocess.SubprocessError):
-            version = "could not read version"
-        lines.append((name, path, version))
-    return ok, lines

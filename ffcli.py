@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""ffcli - run ffmpeg presets or custom commands, and summon the web cutter.
+"""ffcli - run ffmpeg presets or custom commands from a terminal menu.
 
-Two ways to use it:
+`ffcli` in a folder opens the interactive menu: pick media, pick a preset (or
+type your own FFmpeg options), run 1-4 conversions in parallel, and manage the
+preset library.
 
-  * interactive  - `ffcli` in a folder opens the terminal UI ported from the
-                   original tool (multi-select, search, preset manager).
-  * scriptable   - `ffcli run ...` / `ffcli presets ...` for pipelines.
-
-Cutting (trim / waveform) is intentionally not reimplemented here: `ffcli cut`
-starts the web dashboard, which owns that job.
+Cutting (trim / waveform) is intentionally not reimplemented here: the menu's
+"Open the web cutter" entry starts the dashboard in `ffcli_web.py`, which owns
+that job.
 
 Standard library only.
 """
@@ -16,8 +15,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import glob
-import json
 import os
 import re
 import subprocess
@@ -438,29 +435,13 @@ def interactive_menu(title, options, subtitle=None, max_visible=None,
 
 # --- job execution (shared by the menu and the subcommands) ---
 
-def execute_jobs(inputs, args, ext, jobs=1, delete_after=False, output=None,
-                 dry_run=False, quiet=False, skip_existing=False):
-    """Run ffmpeg over `inputs`. Returns (succeeded, failed, skipped)."""
-    plan = []
-    skipped = 0
-    for source in inputs:
-        target = output if output else ffcore.default_output(source, ext)
-        if skip_existing and os.path.exists(target):
-            skipped += 1
-            continue
-        plan.append((source, target))
-
+def execute_jobs(inputs, args, ext, jobs=1, delete_after=False):
+    """Run ffmpeg over `inputs`. Returns (succeeded, failed)."""
+    plan = [(source, ffcore.default_output(source, ext)) for source in inputs]
     if not plan:
-        if not quiet:
-            print(f"{UI.YELLOW}Nothing to do ({skipped} skipped).{UI.END}")
-        return 0, 0, skipped
+        return 0, 0
 
-    if dry_run:
-        for source, target in plan:
-            print(ffcore.format_args(ffcore.build_command(source, target, args)))
-        return 0, 0, skipped
-
-    show_progress = INTERACTIVE and not quiet and len(plan) > 0
+    show_progress = INTERACTIVE
     state = {source: {"pct": 0.0, "speed": "", "running": False} for source, _ in plan}
     lock = threading.Lock()
     width = 0
@@ -549,14 +530,11 @@ def execute_jobs(inputs, args, ext, jobs=1, delete_after=False, output=None,
             sys.stdout.write(UI.CLEAR_LINE)
         sys.stdout.flush()
 
-    if not quiet:
-        summary = f"{UI.GREEN}{succeeded} succeeded{UI.END}"
-        if failed:
-            summary += f", {UI.RED}{failed} failed{UI.END}"
-        if skipped:
-            summary += f", {UI.GRAY}{skipped} skipped{UI.END}"
-        print(summary)
-    return succeeded, failed, skipped
+    summary = f"{UI.GREEN}{succeeded} succeeded{UI.END}"
+    if failed:
+        summary += f", {UI.RED}{failed} failed{UI.END}"
+    print(summary)
+    return succeeded, failed
 
 
 # --- interactive flows ---
@@ -869,343 +847,26 @@ def main_menu(config, directory):
             show_preset_location(config)
 
 
-# --- subcommands ---
-
-def expand_inputs(raw_inputs, directory):
-    resolved = []
-    for item in raw_inputs:
-        path = item if os.path.isabs(item) else os.path.join(directory, item)
-        path = os.path.abspath(os.path.expanduser(path))
-        if os.path.isdir(path):
-            resolved.extend(os.path.join(path, name) for name in ffcore.Media.list_dir(path))
-        elif any(ch in item for ch in "*?["):
-            resolved.extend(sorted(p for p in glob.glob(path) if os.path.isfile(p)))
-        elif os.path.isfile(path):
-            resolved.append(path)
-        else:
-            raise FileNotFoundError(item)
-
-    unique = []
-    for path in resolved:
-        if path not in unique:
-            unique.append(path)
-    if not unique:
-        raise FileNotFoundError(", ".join(raw_inputs))
-    return unique
-
-
-def cmd_run(ns, config, directory):
-    presets, _ = ffcore.load_presets(config)
-    token_cmd = getattr(ns, "cmd_tokens", None)
-
-    if bool(ns.preset) == (bool(ns.cmd) or token_cmd is not None):
-        print("ffcli run: pass exactly one of --preset or --cmd/-- <args>", file=sys.stderr)
-        return 2
-
-    if ns.preset:
-        if ns.preset not in presets:
-            print(f"ffcli run: unknown preset '{ns.preset}'. Try: ffcli presets list", file=sys.stderr)
-            return 2
-        entry = presets[ns.preset]
-        args = ffcore.parse_args(entry["cmd"])
-        ext = ffcore.normalize_ext(ns.ext, entry["ext"])
-    elif token_cmd is not None:
-        args = list(token_cmd)
-        ext = ffcore.normalize_ext(ns.ext, ".mp4")
-    else:
-        args, detected = ffcore.extract_pasted(ns.cmd)
-        ext = ffcore.normalize_ext(ns.ext, detected or ".mp4")
-
-    if not args:
-        print("ffcli run: the command holds no ffmpeg options", file=sys.stderr)
-        return 2
-
-    inputs = expand_inputs(ns.inputs, directory)
-    if ns.out and len(inputs) > 1:
-        print("ffcli run: --out only works with a single input", file=sys.stderr)
-        return 2
-
-    output = None
-    if ns.out:
-        output = ns.out if os.path.isabs(ns.out) else os.path.join(directory, ns.out)
-        output = os.path.abspath(output)
-
-    if not ns.quiet and not ns.dry_run:
-        print(f"{UI.GRAY}{len(inputs)} file(s) | {ffcore.format_args(args)} | -> {ext}{UI.END}")
-
-    succeeded, failed, _ = execute_jobs(
-        inputs, args, ext,
-        jobs=ns.jobs, delete_after=ns.delete, output=output,
-        dry_run=ns.dry_run, quiet=ns.quiet, skip_existing=ns.skip_existing,
-    )
-    return 0 if failed == 0 else 1
-
-
-def cmd_presets(ns, config, directory):
-    presets, source = ffcore.load_presets(config)
-    action = ns.preset_action
-
-    if action == "list":
-        if ns.json:
-            print(json.dumps(presets, indent=2, ensure_ascii=False))
-            return 0
-        if not presets:
-            print("No presets. Add one with: ffcli presets add NAME --cmd \"...\" --ext .mp4")
-            return 0
-        width = max(len(name) for name in presets)
-        for name, data in presets.items():
-            print(f"{name.ljust(width)}  {data['ext'].ljust(6)}  {data['cmd']}")
-        print(f"\n{len(presets)} preset(s) | {config}")
-        return 0
-
-    if action == "show":
-        if ns.name not in presets:
-            print(f"ffcli presets: unknown preset '{ns.name}'", file=sys.stderr)
-            return 2
-        entry = presets[ns.name]
-        print(f"name: {ns.name}")
-        print(f"ext:  {entry['ext']}")
-        print(f"cmd:  {entry['cmd']}")
-        return 0
-
-    if action == "add":
-        if ns.name in presets and not ns.force:
-            print(f"ffcli presets: '{ns.name}' exists (use --force to replace)", file=sys.stderr)
-            return 2
-        args, detected = ffcore.extract_pasted(ns.cmd)
-        if not args:
-            print("ffcli presets: --cmd holds no ffmpeg options", file=sys.stderr)
-            return 2
-        presets[ns.name] = {
-            "cmd": ffcore.format_args(args),
-            "ext": ffcore.normalize_ext(ns.ext, detected or ".mp4"),
-        }
-        ffcore.save_presets(config, presets)
-        print(f"saved '{ns.name}' -> {config}")
-        return 0
-
-    if action == "set":
-        if ns.name not in presets:
-            print(f"ffcli presets: unknown preset '{ns.name}'", file=sys.stderr)
-            return 2
-        entry = dict(presets[ns.name])
-        if ns.cmd is not None:
-            args, detected = ffcore.extract_pasted(ns.cmd, entry["ext"])
-            if not args:
-                print("ffcli presets: --cmd holds no ffmpeg options", file=sys.stderr)
-                return 2
-            entry["cmd"] = ffcore.format_args(args)
-            if detected:
-                entry["ext"] = detected
-        if ns.ext:
-            entry["ext"] = ffcore.normalize_ext(ns.ext, entry["ext"])
-        final_name = ns.new_name or ns.name
-        if final_name != ns.name:
-            del presets[ns.name]
-        presets[final_name] = entry
-        ffcore.save_presets(config, presets)
-        print(f"updated '{final_name}'")
-        return 0
-
-    if action == "rm":
-        if ns.name not in presets:
-            print(f"ffcli presets: unknown preset '{ns.name}'", file=sys.stderr)
-            return 2
-        del presets[ns.name]
-        ffcore.save_presets(config, presets)
-        print(f"removed '{ns.name}'")
-        return 0
-
-    if action == "import":
-        imported = ffcore.read_presets(os.path.abspath(os.path.expanduser(ns.file)))
-        if not imported:
-            print(f"ffcli presets: nothing usable in {ns.file}", file=sys.stderr)
-            return 2
-        merged = {} if ns.replace else dict(presets)
-        merged.update(imported)
-        ffcore.save_presets(config, merged)
-        print(f"imported {len(imported)} preset(s) | library now {len(merged)}")
-        return 0
-
-    if action == "export":
-        target = os.path.abspath(os.path.expanduser(ns.file))
-        ffcore.save_presets(target, presets)
-        print(f"exported {len(presets)} preset(s) -> {target}")
-        return 0
-
-    print(f"ffcli presets: unknown action '{action}'", file=sys.stderr)
-    return 2
-
-
-def cmd_cut(ns, config, directory):
-    target = directory if not ns.path else ns.path
-    if not os.path.isabs(target):
-        target = os.path.join(directory, target)
-    return summon_web(os.path.abspath(target), ns.port)
-
-
-def cmd_doctor(ns, config, directory):
-    presets, source = ffcore.load_presets(config)
-    print(f"ffcli {ffcore.VERSION}")
-    print(f"python      {sys.version.split()[0]} ({sys.executable})")
-    print(f"script dir  {ffcore.SCRIPT_DIR}")
-    print(f"work dir    {directory}")
-    print(f"presets     {config} [{len(presets)} preset(s), source: {source}]")
-
-    ok, lines = ffcore.check_tools()
-    for name, path, version in lines:
-        print(f"{name:<11} {path or '-'}\n            {version}")
-    if not os.path.exists(os.path.join(ffcore.SCRIPT_DIR, "ffcli_web.py")):
-        ok = False
-        print("web ui      MISSING ffcli_web.py")
-    else:
-        print(f"web ui      {os.path.join(ffcore.SCRIPT_DIR, 'ffcli_web.py')}")
-    print("\nOK" if ok else "\nSome tools are missing - install ffmpeg and make sure it is in PATH.")
-    return 0 if ok else 1
-
-
-EPILOG = """examples:
-  ffcli                                      # interactive menu for the current folder
-  ffcli run movie.mkv -p "Max Compression (H.265 HEVC)"
-  ffcli run *.mp4 -- "-c:v" libx264 -crf 23 "-c:a" aac
-  ffcli run *.mp4 -c "-c:v libx264 -crf 23 -c:a aac" -e .mp4 -j 3
-  ffcli run clips/ -p "Extract MP3 Audio (VBR High Quality)" --delete
-  ffcli run movie.mp4 -p "Extract MP3 Audio (VBR High Quality)" --dry-run
-  ffcli presets list
-  ffcli presets add "GIF 15fps" --cmd '-vf "fps=15,scale=480:-1"' --ext .gif
-  ffcli cut movie.mp4                        # open the web cutter in the browser
-
-tip: ffmpeg options start with '-', so use `-- <args>` (or `--cmd="..."`) to
-pass them without the shell/parser eating them.
-"""
-
-
-def common_options():
-    """Options accepted both before and after the subcommand."""
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--config", default=argparse.SUPPRESS,
-                        help="preset JSON (default: ffmpeg_commands.json next to ffcli.py)")
-    common.add_argument("-C", "--dir", default=argparse.SUPPRESS,
-                        help="folder holding the inputs (default: cwd)")
-    return common
-
-
-def build_parser():
-    common = common_options()
+def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="ffcli",
-        description="ffmpeg preset runner with a built-in web cutter.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=EPILOG,
+        description="FFmpeg preset runner with a built-in web cutter.",
     )
     parser.add_argument("-V", "--version", action="version", version=f"ffcli {ffcore.VERSION}")
-    parser.add_argument("--config", help="preset JSON (default: ffmpeg_commands.json next to ffcli.py)")
-    parser.add_argument("-C", "--dir", default=".", help="folder holding the inputs (default: cwd)")
-    sub = parser.add_subparsers(dest="command")
+    parser.parse_args(argv)
 
-    run = sub.add_parser("run", parents=[common], help="convert files with a preset or a custom command")
-    run.add_argument("inputs", nargs="+", help="files, glob patterns or folders")
-    run.add_argument("-p", "--preset", help="preset name")
-    run.add_argument("-c", "--cmd", help="custom ffmpeg options (everything after -i)")
-    run.add_argument("-e", "--ext", help="output extension (default: from the preset)")
-    run.add_argument("-o", "--out", help="exact output path (single input only)")
-    run.add_argument("-j", "--jobs", type=int, default=1, help="parallel ffmpeg processes (default 1)")
-    run.add_argument("--delete", action="store_true", help="delete the source after a successful run")
-    run.add_argument("--skip-existing", action="store_true", help="skip inputs whose output exists")
-    run.add_argument("--dry-run", action="store_true", help="print the ffmpeg commands only")
-    run.add_argument("-q", "--quiet", action="store_true", help="no progress output")
+    if not INTERACTIVE:
+        print("ffcli is an interactive tool: run it from a terminal, inside the folder you want to work on.")
+        return 1
 
-    presets = sub.add_parser("presets", parents=[common], help="manage the preset library")
-    actions = presets.add_subparsers(dest="preset_action", required=True)
+    missing = ffcore.missing_tools()
+    if missing:
+        print(f"{UI.RED}Missing in PATH: {', '.join(missing)}{UI.END}")
+        print(f"{UI.GRAY}Install FFmpeg (with ffprobe) and reopen the terminal.{UI.END}")
+        pause()
+        return 1
 
-    listing = actions.add_parser("list", help="print every preset")
-    listing.add_argument("--json", action="store_true", help="machine readable output")
-
-    show = actions.add_parser("show", help="print one preset")
-    show.add_argument("name")
-
-    add = actions.add_parser("add", help="create a preset")
-    add.add_argument("name")
-    add.add_argument("--cmd", required=True, help="ffmpeg options after -i")
-    add.add_argument("--ext", help="output extension (default: taken from --cmd, else .mp4)")
-    add.add_argument("--force", action="store_true", help="replace an existing preset")
-
-    set_ = actions.add_parser("set", help="update a preset")
-    set_.add_argument("name")
-    set_.add_argument("--name", dest="new_name", help="rename it")
-    set_.add_argument("--cmd", help="new ffmpeg options")
-    set_.add_argument("--ext", help="new output extension")
-
-    remove = actions.add_parser("rm", help="delete a preset")
-    remove.add_argument("name")
-
-    imp = actions.add_parser("import", help="import presets from a JSON file")
-    imp.add_argument("file")
-    imp.add_argument("--replace", action="store_true", help="drop the current library")
-
-    exp = actions.add_parser("export", help="write the preset library to a JSON file")
-    exp.add_argument("file")
-
-    cut = sub.add_parser("cut", aliases=["web"], parents=[common],
-                         help="open the web cutter (trim / waveform UI)")
-    cut.add_argument("path", nargs="?", help="file or folder to open (default: work dir)")
-    cut.add_argument("--port", type=int, help="server port (default 8765)")
-
-    sub.add_parser("doctor", parents=[common], help="check ffmpeg, ffprobe and the preset file")
-    return parser
-
-
-def main(argv=None):
-    if argv is None:
-        argv = sys.argv[1:]
-    argv = list(argv)
-
-    trailing_cmd = None
-    if "--" in argv:
-        split = argv.index("--")
-        trailing_cmd = argv[split + 1:]
-        argv = argv[:split]
-
-    parser = build_parser()
-    ns = parser.parse_args(argv)
-
-    if trailing_cmd is not None:
-        if not hasattr(ns, "cmd"):
-            print("ffcli: '--' is only valid for `ffcli run`", file=sys.stderr)
-            return 2
-        if ns.cmd:
-            print("ffcli run: use either -c/--cmd or '-- <args>', not both", file=sys.stderr)
-            return 2
-        ns.cmd_tokens = trailing_cmd
-
-    directory = os.path.abspath(os.path.expanduser(ns.dir))
-    if not os.path.isdir(directory):
-        print(f"ffcli: not a folder: {directory}", file=sys.stderr)
-        return 2
-    config = ffcore.resolve_config_path(ns.config)
-
-    if ns.command is None:
-        if not INTERACTIVE:
-            parser.print_help()
-            return 0
-        return main_menu(config, directory)
-
-    handlers = {
-        "run": cmd_run,
-        "presets": cmd_presets,
-        "cut": cmd_cut,
-        "web": cmd_cut,
-        "doctor": cmd_doctor,
-    }
-    try:
-        return handlers[ns.command](ns, config, directory)
-    except FileNotFoundError as exc:
-        print(f"ffcli: no such file or folder: {exc}", file=sys.stderr)
-        return 2
-    except KeyboardInterrupt:
-        ffcore.cancel_all()
-        print("\nCancelled.")
-        return 130
+    return main_menu(ffcore.resolve_config_path(), os.getcwd())
 
 
 if __name__ == "__main__":

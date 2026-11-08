@@ -14,9 +14,5 @@
     "Extract MP3 Audio (320kbps Best Quality)": {
         "cmd": "-vn -c:a libmp3lame -b:a 320k",
         "ext": ".mp3"
-    },
-    "Extract MP3 Audio (VBR High Quality)": {
-        "cmd": "-vn -c:a libmp3lame -q:a 2",
-        "ext": ".mp3"
     }
 }
