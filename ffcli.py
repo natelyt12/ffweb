@@ -161,14 +161,15 @@ def interactive_input(prompt, default=""):
 
 def _plain_menu(title, options, subtitle, multi_select):
     """Line-based fallback so the tool never hangs on a piped stdin."""
+    labels = [option.label if isinstance(option, Option) else option for option in options]
     print(f"\n=== {title} ===")
     if subtitle:
         print(f"    {subtitle}")
-    for i, option in enumerate(options):
-        if "---" in option:
+    for index, label in enumerate(labels):
+        if "---" in label:
             print("  " + "-" * 50)
         else:
-            print(f"  {i}. {strip_ansi(option)}")
+            print(f"  {index}. {strip_ansi(label)}")
 
     hint = "indexes (comma separated, or 'all')" if multi_select else "index"
     try:
@@ -179,7 +180,7 @@ def _plain_menu(title, options, subtitle, multi_select):
         return [] if multi_select else -1
 
     if multi_select and raw == "all":
-        picks = [i for i, o in enumerate(options) if "---" not in o]
+        picks = [i for i, label in enumerate(labels) if "---" not in label]
     else:
         picks = []
         for chunk in re.split(r"[,\s]+", raw):
@@ -192,102 +193,190 @@ def _plain_menu(title, options, subtitle, multi_select):
             elif chunk.isdigit():
                 picks.append(int(chunk))
 
-    picks = [p for p in picks if 0 <= p < len(options) and "---" not in options[p]]
+    picks = [p for p in picks if 0 <= p < len(labels) and "---" not in labels[p]]
     if multi_select:
         return sorted(set(picks))
     return picks[0] if picks else -1
 
 
-def interactive_menu(title, options, subtitle=None, max_visible=None,
-                     multi_select=False, enable_search=False, toggle_groups=None):
-    """Scrollable menu with arrows, hotkeys, search and multi-select.
+KIND_PLAIN = "plain"
+KIND_ITEM = "item"
+KIND_SEPARATOR = "separator"
+KIND_TOGGLE = "toggle"
+KIND_FILE = "file"
 
-    Returns the chosen option index (-1 when cancelled), or a list of indices
-    when multi_select is set.
+SORT_MODES = ("name", "added", "group")
+SORT_LABELS = {
+    "name": "name (A-Z)",
+    "added": "date added (newest first)",
+    "group": "file group (.ext)",
+}
+
+
+class Option:
+    """A menu row plus the metadata the filter and the sort switches need."""
+
+    __slots__ = ("label", "kind", "group", "sort_name", "sort_added", "payload")
+
+    def __init__(self, label, kind=KIND_PLAIN, group="", sort_name=None,
+                 sort_added=0.0, payload=None):
+        self.label = label
+        self.kind = kind
+        self.group = group
+        self.sort_name = strip_ansi(label) if sort_name is None else sort_name
+        self.sort_added = sort_added
+        self.payload = payload
+
+    @property
+    def selectable(self):
+        return self.kind != KIND_SEPARATOR
+
+
+def _as_option(item):
+    if isinstance(item, Option):
+        return item
+    return Option(item, KIND_SEPARATOR if "---" in item else KIND_PLAIN)
+
+
+def _sort_indices(options, indices, mode):
+    if mode == "added":
+        return sorted(indices, key=lambda i: (-options[i].sort_added, options[i].sort_name.casefold()))
+    if mode == "group":
+        return sorted(indices, key=lambda i: (options[i].group, options[i].sort_name.casefold()))
+    return sorted(indices, key=lambda i: options[i].sort_name.casefold())
+
+
+def _entry_selectable(rows, options, index):
+    entry = rows[index]
+    if entry[0] == "virtual":
+        return True
+    return options[entry[1]].selectable
+
+
+def _move(rows, options, cursor, delta):
+    """Next focusable row, wrapping around and skipping separators."""
+    total = len(rows)
+    if not total:
+        return 0
+    index = cursor
+    for _ in range(total):
+        index = (index + delta) % total
+        if _entry_selectable(rows, options, index):
+            return index
+    return cursor
+
+
+def _group_targets(options, group):
+    return [i for i, o in enumerate(options) if o.kind == KIND_FILE and o.group == group]
+
+
+def interactive_menu(title, options, subtitle=None, max_visible=None,
+                     multi_select=False, enable_filter=False, sort_mode="name"):
+    """Scrollable menu with multi-select.
+
+    With `enable_filter` the first two rows are a live filter and a sort switch
+    (name / date added / file group). Separator rows are never focusable, so the
+    cursor cannot land on them and Enter can never pick one.
+
+    Returns the chosen option index (-1 when cancelled), or the list of selected
+    indices when `multi_select` is set.
     """
-    if toggle_groups is None:
-        toggle_groups = {}
+    options = [_as_option(option) for option in options]
     if not INTERACTIVE:
         return _plain_menu(title, options, subtitle, multi_select)
 
-    search_query = ""
-    selected_index = 0
-    selected_items = set()
+    query = ""
+    sort = sort_mode if sort_mode in SORT_MODES else "name"
+    cursor = 0
+    selected = set()
+    pinned = 2 if enable_filter else 0
+
+    def rows_now():
+        if not enable_filter:
+            return [("option", i) for i in range(len(options))]
+        rows = [("virtual", "filter"), ("virtual", "sort")]
+        if not query:
+            rows += [("option", i) for i, o in enumerate(options) if o.kind == KIND_TOGGLE]
+        pool = [i for i, o in enumerate(options) if o.kind in (KIND_ITEM, KIND_FILE)]
+        if query:
+            pool = [i for i in pool if query.casefold() in options[i].sort_name.casefold()]
+        rows += [("option", i) for i in _sort_indices(options, pool, sort)]
+        rows += [("option", i) for i, o in enumerate(options) if o.kind == KIND_PLAIN]
+        return rows
 
     print("\033[2J\033[H", end="")
 
     while True:
-        visible = []
-        if enable_search:
-            visible.append(-2)
-        for i, option in enumerate(options):
-            if "---" in option:
-                if not search_query:
-                    visible.append(i)
-                continue
-            if enable_search and search_query and search_query.lower() not in strip_ansi(option).lower():
-                continue
-            visible.append(i)
-
-        count = len(visible)
-        if count == 0:
-            selected_index = 0
-        elif selected_index >= count:
-            selected_index = count - 1
+        rows = rows_now()
+        total = len(rows)
+        if total:
+            cursor = min(cursor, total - 1)
+            if not _entry_selectable(rows, options, cursor):
+                cursor = _move(rows, options, cursor, 1)
 
         try:
             term_lines = os.get_terminal_size().lines
         except OSError:
             term_lines = 24
 
-        limit = max_visible if max_visible is not None else max(count, 1)
-        limit = max(5, min(limit, max(5, term_lines - 8)))
+        body = rows[pinned:]
+        body_len = len(body)
+        limit = max_visible if max_visible is not None else max(body_len, 1)
+        limit = max(5, min(limit, max(5, term_lines - 10)))
+        start = end = 0
+        if body_len:
+            relative = max(0, cursor - pinned)
+            start = max(0, relative - limit // 2)
+            end = min(start + limit, body_len)
+            start = max(0, end - limit)
+
+        def draw(row_index, focused):
+            entry = rows[row_index]
+            marker = f"{UI.SELECT}➜  " if focused else "   "
+            if entry[0] == "virtual":
+                if entry[1] == "filter":
+                    value = f"'{query}'" if query else "none"
+                    text = f"{UI.YELLOW}Filter: {value}{UI.END} {UI.GRAY}(Enter to type){UI.END}"
+                else:
+                    text = f"{UI.YELLOW}Sort: {SORT_LABELS[sort]}{UI.END} {UI.GRAY}(Enter to change){UI.END}"
+                sys.stdout.write(f" {marker}{text}{UI.END}\033[K\n")
+                return
+
+            option = options[entry[1]]
+            if option.kind == KIND_SEPARATOR:
+                sys.stdout.write(f" {UI.GRAY} {option.label}{UI.END}\033[K\n")
+                return
+
+            prefix = ""
+            if multi_select:
+                if option.kind == KIND_FILE:
+                    prefix = f"{UI.GREEN}[x]{UI.END} " if entry[1] in selected else f"{UI.GRAY}[ ]{UI.END} "
+                elif option.kind == KIND_TOGGLE:
+                    targets = _group_targets(options, option.group)
+                    marked = bool(targets) and all(t in selected for t in targets)
+                    prefix = f"{UI.GREEN}[x]{UI.END} " if marked else f"{UI.GRAY}[ ]{UI.END} "
+
+            tint = UI.SELECT if focused else UI.WHITE
+            body_text = option.label.replace(UI.END, UI.END + tint) if UI.END in option.label else option.label
+            sys.stdout.write(f" {marker}{prefix}{tint}{body_text}{UI.END}\033[K\n")
 
         sys.stdout.write(UI.HOME_CURSOR + UI.HIDE_CURSOR)
         sys.stdout.write(f"{UI.HEADER}{UI.BOLD}=== {title} ==={UI.END}\033[K\n")
         if subtitle:
             sys.stdout.write(f" {UI.GRAY}{subtitle}{UI.END}\033[K\n")
 
-        start = end = 0
-        if count == 0:
+        for index in range(pinned):
+            draw(index, cursor == index)
+
+        if not body_len:
             sys.stdout.write(f"    {UI.GRAY}No matches found.{UI.END}\033[K\n")
         else:
-            start = max(0, selected_index - limit // 2)
-            end = min(start + limit, count)
-            start = max(0, end - limit)
-
             sys.stdout.write(f"    {UI.CYAN}▲{UI.END}\033[K\n" if start > 0 else "\033[K\n")
-            for row in range(start, end):
-                original = visible[row]
-                if original == -2:
-                    label = f"{UI.YELLOW}Search: {search_query!r}{UI.END}" if search_query \
-                        else f"{UI.YELLOW}Search... (Enter to type a filter){UI.END}"
-                else:
-                    label = options[original]
+            for offset in range(start, end):
+                draw(pinned + offset, cursor == pinned + offset)
+            sys.stdout.write(f"    {UI.CYAN}▼{UI.END}\033[K\n" if end < body_len else "\033[K\n")
 
-                if "---" in label:
-                    sys.stdout.write(f" {UI.GRAY} {label}{UI.END}\033[K\n")
-                    continue
-
-                prefix = ""
-                if multi_select and original != -2:
-                    if original in toggle_groups:
-                        targets = toggle_groups[original]
-                        marked = bool(targets) and all(t in selected_items for t in targets)
-                    else:
-                        marked = original in selected_items
-                    prefix = f"{UI.GREEN}[x]{UI.END} " if marked else f"{UI.GRAY}[ ]{UI.END} "
-
-                if row == selected_index:
-                    body = label.replace(UI.END, UI.END + UI.SELECT) if UI.END in label else label
-                    sys.stdout.write(f" {UI.SELECT}➜  {prefix}{body}{UI.END}\033[K\n")
-                else:
-                    body = label.replace(UI.END, UI.END + UI.WHITE) if UI.END in label else label
-                    sys.stdout.write(f"    {prefix}{UI.WHITE}{body}{UI.END}\033[K\n")
-
-            sys.stdout.write(f"    {UI.CYAN}▼{UI.END}\033[K\n" if end < count else "\033[K\n")
-
-        scroll = f" | Showing {start + 1}-{end} of {count}" if limit < count else ""
+        scroll = f" | Showing {start + 1}-{end} of {body_len}" if limit < body_len else ""
         help_text = "↑/↓: Move | Enter: Confirm | Esc: Back"
         if multi_select:
             help_text += " | Space: Toggle"
@@ -296,68 +385,55 @@ def interactive_menu(title, options, subtitle=None, max_visible=None,
         sys.stdout.flush()
 
         key = get_key()
-        confirm = key == "enter"
-        cancel = key == "esc"
-
-        if key == "up" and count:
-            selected_index = (selected_index - 1) % count
-        elif key == "down" and count:
-            selected_index = (selected_index + 1) % count
-        elif key == "space" and count:
-            original = visible[selected_index]
-            if original == -2:
-                confirm = True
-            elif multi_select and "---" not in options[original]:
-                if original in toggle_groups:
-                    targets = toggle_groups[original]
-                    if targets and all(t in selected_items for t in targets):
-                        for t in targets:
-                            selected_items.discard(t)
+        if key == "up":
+            cursor = _move(rows, options, cursor, -1)
+            continue
+        if key == "down":
+            cursor = _move(rows, options, cursor, 1)
+            continue
+        if key == "esc":
+            sys.stdout.write(UI.SHOW_CURSOR)
+            return [] if multi_select else -1
+        if key == "space" and total and multi_select:
+            entry = rows[cursor]
+            if entry[0] == "option":
+                option = options[entry[1]]
+                if option.kind == KIND_FILE:
+                    selected.symmetric_difference_update({entry[1]})
+                elif option.kind == KIND_TOGGLE:
+                    targets = _group_targets(options, option.group)
+                    if targets and all(t in selected for t in targets):
+                        selected.difference_update(targets)
                     else:
-                        selected_items.update(targets)
-                elif original in selected_items:
-                    selected_items.discard(original)
-                else:
-                    selected_items.add(original)
+                        selected.update(targets)
+            continue
+        if key != "enter" or not total:
+            continue
 
-        if confirm:
-            if not count:
-                sys.stdout.write(UI.SHOW_CURSOR)
-                return [] if multi_select else -1
-            original = visible[selected_index]
-            if original == -2:
-                sys.stdout.write(UI.SHOW_CURSOR)
-                print("\n".join(["", f"{UI.HEADER}=== SEARCH FILTER ==={UI.END}",
-                                 f"{UI.GRAY}Type a keyword, blank to clear. Esc to cancel.{UI.END}", ""]))
-                new_query = interactive_input("Search keyword > ", search_query)
-                if new_query is not None:
-                    search_query = new_query.strip()
-                selected_index = 0
-                print("\033[2J\033[H", end="")
-                continue
-            if "---" not in options[original]:
-                print()
-                sys.stdout.write(UI.HIDE_CURSOR)
-                if multi_select:
-                    if not selected_items:
-                        continue
-                    return sorted(i for i in selected_items if i not in toggle_groups)
-                return original
+        entry = rows[cursor]
+        if entry[0] == "virtual":
             sys.stdout.write(UI.SHOW_CURSOR)
-            return [] if multi_select else -1
+            if entry[1] == "filter":
+                sys.stdout.write(f"\r\033[K{UI.HEADER}Filter by name{UI.END} "
+                                 f"{UI.GRAY}(blank clears it, Esc cancels){UI.END}\n")
+                typed = interactive_input(f"{UI.YELLOW}Keyword > {UI.END}", query)
+                if typed is not None:
+                    query = typed.strip()
+                cursor = pinned
+            else:
+                sort = SORT_MODES[(SORT_MODES.index(sort) + 1) % len(SORT_MODES)]
+            print("\033[2J\033[H", end="")
+            continue
 
-        if cancel:
-            sys.stdout.write(UI.SHOW_CURSOR)
-            return [] if multi_select else -1
+        option = options[entry[1]]
+        if not option.selectable:
+            continue
+        if multi_select and not selected:
+            continue
 
-        if key and len(key) == 1 and key.isalnum() and not multi_select:
-            for original in visible:
-                if original == -2:
-                    continue
-                text = strip_ansi(options[original]).strip()
-                if text.lower().startswith(f"{key.lower()}.") or text.lower().startswith(f"{key.lower()} "):
-                    sys.stdout.write(UI.SHOW_CURSOR)
-                    return original
+        print()
+        sys.stdout.write(UI.HIDE_CURSOR)
+        return sorted(selected) if multi_select else entry[1]
 
 
 # --- job execution (shared by the menu and the subcommands) ---
@@ -491,31 +567,43 @@ def choose_preset(presets):
         print(f"{UI.RED}No presets yet. Add one from 'Manage presets'.{UI.END}")
         pause()
         return None
-    options = [f"{UI.CYAN}{n}{UI.END} {UI.GRAY}[{presets[n]['ext']}]{UI.END}" for n in names]
-    options.append("---")
-    options.append("0. Back")
-    index = interactive_menu("SELECT PRESET", options, enable_search=True)
+    options = [
+        Option(f"{UI.CYAN}{name}{UI.END} {UI.GRAY}[{presets[name]['ext']}]{UI.END}",
+               kind=KIND_ITEM, sort_name=name)
+        for name in names
+    ]
+    options.append(Option("Back"))
+    index = interactive_menu("SELECT PRESET", options, enable_filter=True,
+                             subtitle="Use the Filter row to narrow a long list")
     if index in (-1, len(options) - 1):
         return None
     return names[index]
 
 
-def build_file_menu(files):
+def build_file_menu(files, directory):
     options = []
-    groups = {}
-    for ext in sorted({os.path.splitext(name)[1].lower() for name in files}):
-        if not ext:
-            continue
-        groups[len(options)] = [i for i, name in enumerate(files) if os.path.splitext(name)[1].lower() == ext]
-        options.append(f"{UI.YELLOW}Select ALL {ext}{UI.END}")
-    if options:
-        options.append("---")
+    for ext in sorted({os.path.splitext(name)[1].lower() for name in files} - {""}):
+        options.append(Option(f"{UI.YELLOW}Select ALL {ext}{UI.END}",
+                              kind=KIND_TOGGLE, group=ext, sort_name=ext))
 
-    base = len(options)
     for name in files:
-        kind_color = {"video": UI.HEADER, "audio": UI.BLUE, "image": UI.YELLOW}.get(ffcore.Media.kind(name), UI.GRAY)
-        options.append(f"{kind_color}{ffcore.Media.ext_label(name)}{UI.END} {name} {UI.GRAY}({ffcore.Media.human_size(name)}){UI.END}")
-    return options, groups, base
+        full_path = os.path.join(directory, name)
+        try:
+            added = os.path.getmtime(full_path)
+        except OSError:
+            added = 0.0
+        kind_color = {"video": UI.HEADER, "audio": UI.BLUE, "image": UI.YELLOW}.get(
+            ffcore.Media.kind(name), UI.GRAY)
+        options.append(Option(
+            f"{kind_color}{ffcore.Media.ext_label(name)}{UI.END} {name} "
+            f"{UI.GRAY}({ffcore.Media.human_size(full_path)}){UI.END}",
+            kind=KIND_FILE,
+            group=os.path.splitext(name)[1].lower(),
+            sort_name=name,
+            sort_added=added,
+            payload=name,
+        ))
+    return options
 
 
 def prompt_manual_command(default_ext):
@@ -556,21 +644,21 @@ def run_process_flow(presets, directory):
         pause()
         return
 
-    options, groups, base = build_file_menu(files)
+    options = build_file_menu(files, directory)
     chosen = interactive_menu(
         "SELECT MEDIA FILES", options,
-        subtitle="Space: toggle | Enter: confirm | Type to search",
-        multi_select=True, enable_search=True, toggle_groups=groups,
+        subtitle="Space: toggle a file | Enter: confirm | Filter/Sort rows on top",
+        multi_select=True, enable_filter=True,
     )
     if not chosen:
         return
 
-    selected = [os.path.join(directory, files[i - base]) for i in sorted(chosen)]
+    selected = [os.path.join(directory, options[index].payload) for index in chosen]
     action = interactive_menu(f"PROCESS: {len(selected)} file(s) selected", [
-        "1. Use a saved preset",
-        "2. Enter a custom ffmpeg command",
+        "Use a saved preset",
+        "Enter a custom ffmpeg command",
         "---",
-        "0. Back",
+        "Back",
     ])
     if action in (-1, 3):
         return
@@ -590,10 +678,10 @@ def run_process_flow(presets, directory):
         args, ext = manual
 
     post = interactive_menu("AFTER A SUCCESSFUL RUN", [
-        "1. Keep the original files (safe)",
-        "2. Delete the originals",
+        "Keep the original files (safe)",
+        "Delete the originals",
         "---",
-        "0. Back",
+        "Back",
     ])
     if post in (-1, 3):
         return
@@ -602,12 +690,12 @@ def run_process_flow(presets, directory):
     jobs = 1
     if len(selected) > 1:
         concurrency = interactive_menu("PARALLEL FFMPEG PROCESSES", [
-            "1. Sequential (1 at a time)",
-            "2. 2 processes",
-            "3. 3 processes",
-            "4. 4 processes",
+            "Sequential (1 at a time)",
+            "2 processes",
+            "3 processes",
+            "4 processes",
             "---",
-            "0. Back",
+            "Back",
         ])
         if concurrency in (-1, 5):
             return
@@ -695,8 +783,8 @@ def delete_preset_flow(presets, config):
     if not name:
         return
     confirm = interactive_menu(f"DELETE PRESET: {name}", [
-        "0. No, keep it",
-        "1. Yes, delete it",
+        "No, keep it",
+        "Yes, delete it",
     ], subtitle="This cannot be undone.")
     if confirm != 1:
         return
@@ -709,13 +797,13 @@ def delete_preset_flow(presets, config):
 def manage_presets_flow(presets, config):
     while True:
         choice = interactive_menu("PRESET LIBRARY", [
-            "1. List presets",
-            "2. Add preset",
-            "3. Edit preset",
-            "4. Delete preset",
+            "List presets",
+            "Add preset",
+            "Edit preset",
+            "Delete preset",
             "---",
-            "0. Back",
-        ], subtitle=f"{len(presets)} preset(s) | {config}")
+            "Back",
+        ], subtitle=f"{len(presets)} preset(s)")
         if choice in (-1, 5):
             return
         if choice == 0:
@@ -729,58 +817,15 @@ def manage_presets_flow(presets, config):
             delete_preset_flow(presets, config)
 
 
-def settings_flow(presets, config):
-    while True:
-        choice = interactive_menu("SETTINGS", [
-            "1. Show preset file location",
-            "2. Export presets",
-            "3. Import presets",
-            "---",
-            "0. Back",
-        ])
-        if choice in (-1, 4):
-            return
-
-        if choice == 0:
-            print(f"\n{UI.CYAN}Preset file:{UI.END} {config}")
-            print(f"{UI.CYAN}Config override:{UI.END} --config PATH or FFCLI_CONFIG")
-            pause()
-
-        elif choice == 1:
-            target = interactive_input("Export to > ", os.path.join(os.getcwd(), "ffmpeg_commands_backup.json"))
-            if not target:
-                continue
-            try:
-                ffcore.save_presets(os.path.abspath(os.path.expanduser(target)), presets)
-                print(f"\n{UI.GREEN}✓ Exported {len(presets)} preset(s) to {target}.{UI.END}")
-            except OSError as exc:
-                print(f"\n{UI.RED}✗ Export failed: {exc}{UI.END}")
-            pause()
-
-        elif choice == 2:
-            source = interactive_input("Import from > ", "ffmpeg_commands_backup.json")
-            if not source:
-                continue
-            loaded = ffcore.read_presets(os.path.abspath(os.path.expanduser(source)))
-            if not loaded:
-                print(f"\n{UI.RED}✗ Nothing usable found in {source}.{UI.END}")
-                pause()
-                continue
-            mode = interactive_menu(f"IMPORT {len(loaded)} PRESET(S)", [
-                "1. Merge into the current library",
-                "2. Replace the current library",
-                "---",
-                "0. Cancel",
-            ])
-            if mode in (-1, 3):
-                continue
-            merged = dict(presets) if mode == 0 else {}
-            merged.update(loaded)
-            presets.clear()
-            presets.update(merged)
-            ffcore.save_presets(config, presets)
-            print(f"\n{UI.GREEN}✓ Library now holds {len(presets)} preset(s).{UI.END}")
-            pause()
+def show_preset_location(config):
+    path = os.path.abspath(config)
+    print(f"\n{UI.CYAN}Preset file:{UI.END} {path}")
+    if os.path.exists(path):
+        print(f"{UI.GRAY}{len(ffcore.read_presets(path))} preset(s), "
+              f"{ffcore.Media.human_size(path)}{UI.END}")
+    else:
+        print(f"{UI.GRAY}Not created yet - it appears after the first save.{UI.END}")
+    pause()
 
 
 def summon_web(target, port=None):
@@ -805,12 +850,12 @@ def main_menu(config, directory):
     presets, _ = ffcore.load_presets(config)
     while True:
         choice = interactive_menu("FFCLI", [
-            "1. Process media in this folder",
-            "2. Manage presets",
-            "3. Open the web cutter",
-            "4. Settings",
+            "Process media in this folder",
+            "Manage presets",
+            "Open the web cutter",
+            "Show preset file location",
             "---",
-            "0. Exit",
+            "Exit",
         ], subtitle=f"{directory} | {len(presets)} preset(s)")
         if choice in (-1, 5):
             return 0
@@ -821,7 +866,7 @@ def main_menu(config, directory):
         elif choice == 2:
             summon_web(directory)
         elif choice == 3:
-            settings_flow(presets, config)
+            show_preset_location(config)
 
 
 # --- subcommands ---

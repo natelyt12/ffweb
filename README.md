@@ -74,14 +74,19 @@ Run `ffcli` with no arguments inside a media folder:
 
 | Key | Action |
 | :--- | :--- |
-| `↑` / `↓` | Move |
-| `Enter` | Confirm |
+| `↑` / `↓` | Move (separators are skipped) |
+| `Enter` | Confirm / open the focused row |
 | `Esc` | Back |
-| `Space` | Toggle a file (multi-select) |
-| Typing a letter/digit | Jump to the matching entry |
+| `Space` | Toggle a file or a whole extension group |
 
-The file picker offers `Select ALL .mp4` style toggles, shows size and type per
-file, and supports a search filter. After picking files you choose a preset or a
+The file picker starts with two control rows:
+
+- **Filter** - type a keyword to narrow the list (blank clears it).
+- **Sort** - press `Enter` to cycle `name (A-Z)` → `date added (newest first)` →
+  `file group (.ext)`.
+
+Below them sit the `Select ALL .mp4` style toggles and the files themselves, each
+with its extension, name and size. After picking files you choose a preset or a
 custom command, whether to delete the originals, and how many FFmpeg processes to
 run at once.
 
